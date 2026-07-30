@@ -6,7 +6,7 @@ from pathlib import Path
 import gspread
 from google.oauth2.service_account import Credentials
 
-import config
+from loyverse import config
 
 _SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",

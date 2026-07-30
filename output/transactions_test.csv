@@ -1,0 +1,53 @@
+﻿Timestamp,Product Name,SKU,Category,Quantity Added,Stock Before,Stock After,Action,Status,Detail/Error
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product A,MM001,Shoes,5,10,15,Update Stock (Found by SKU),Success,
+2026-03-11 13:00:00,Test Product B,MM002,Shoes,3,0,3,Created New Item (Auto SKU: MM002),Success,
+2026-03-11 13:00:00,Bad Product,-,Unknown,1,-,-,,Error,Category not found

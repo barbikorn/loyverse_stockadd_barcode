@@ -1,7 +1,7 @@
 import json
 import gspread
-import config
-import sheets_auth
+from loyverse import config
+from loyverse.sheets import auth as sheets_auth
 
 def check():
     print("🔍 กำลังตรวจสอบสิทธิ์การเข้าถึง Google Sheets...")

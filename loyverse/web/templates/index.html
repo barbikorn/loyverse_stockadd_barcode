@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}Input / Run · Loyverse Sync{% endblock %}
+{% block content %}
+<div class="card">
+  <form id="run-form">
+    <label for="url">Google Sheet URL (Input Data)</label>
+    <input type="url" id="url" name="url" value="{{ url }}"
+           placeholder="https://docs.google.com/spreadsheets/d/..." required>
+    <p class="muted">ชื่อไฟล์ Google Sheet จะถูกใช้เป็น category ใน Loyverse</p>
+
+    <div class="btn-row">
+      <button class="btn btn-1" type="submit" data-process="step1">
+        ▶ Process 1 · สร้างสินค้า + Barcode
+      </button>
+      <button class="btn btn-2" type="submit" data-process="step2">
+        ▶ Process 2 · อัปเดตสต็อก
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Live run panel (hidden until a run starts) -->
+<div class="card" id="run-panel" hidden>
+  <div class="run-head">
+    <h3 id="run-title" style="margin:0">กำลังทำงาน…</h3>
+    <span id="run-state" class="badge badge-running"><span class="spinner"></span> กำลังทำงาน</span>
+  </div>
+
+  <div class="progress" aria-label="ความคืบหน้า">
+    <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+  </div>
+  <p class="muted" id="progress-text">เตรียมข้อมูล…</p>
+
+  <div class="counts">
+    <span class="badge badge-ok">สำเร็จ <b id="c-success">0</b></span>
+    <span class="badge badge-warn">ตีกลับ <b id="c-out">0</b></span>
+    <span class="badge badge-err">ผิดพลาด <b id="c-error">0</b></span>
+  </div>
+
+  <div class="scroll" id="items-wrap" style="margin-top:14px" hidden>
+    <table>
+      <thead><tr><th>#</th><th>สินค้า</th><th>SKU</th><th>สถานะ</th><th>รายละเอียด</th></tr></thead>
+      <tbody id="items-body"></tbody>
+    </table>
+  </div>
+
+  <div id="summary-box" style="margin-top:16px" hidden></div>
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById("run-form");
+  const buttons = form.querySelectorAll("button[data-process]");
+  const panel = document.getElementById("run-panel");
+  const titleEl = document.getElementById("run-title");
+  const stateEl = document.getElementById("run-state");
+  const bar = document.getElementById("progress-bar");
+  const ptext = document.getElementById("progress-text");
+  const cSuccess = document.getElementById("c-success");
+  const cOut = document.getElementById("c-out");
+  const cError = document.getElementById("c-error");
+  const itemsWrap = document.getElementById("items-wrap");
+  const itemsBody = document.getElementById("items-body");
+  const summaryBox = document.getElementById("summary-box");
+
+  let source = null;
+  let counts = { success: 0, out: 0, error: 0 };
+
+  // Map a row Status to a Thai label + CSS class.
+  const STATUS = {
+    Success: { label: "สำเร็จ",  cls: "badge-ok"   },
+    OUT:     { label: "ตีกลับ",  cls: "badge-warn" },
+    Error:   { label: "ผิดพลาด", cls: "badge-err"  },
+  };
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const url = document.getElementById("url").value.trim();
+      if (!url) { document.getElementById("url").reportValidity(); return; }
+      start(btn.dataset.process, url);
+    });
+  });
+
+  function setRunning(on) {
+    buttons.forEach((b) => (b.disabled = on));
+  }
+
+  function start(process, url) {
+    if (source) source.close();
+    // reset panel
+    panel.hidden = false;
+    counts = { success: 0, out: 0, error: 0 };
+    cSuccess.textContent = cOut.textContent = cError.textContent = "0";
+    itemsBody.innerHTML = "";
+    itemsWrap.hidden = true;
+    summaryBox.hidden = true;
+    summaryBox.innerHTML = "";
+    bar.style.width = "0%";
+    bar.className = "progress-bar";
+    stateEl.className = "badge badge-running";
+    stateEl.innerHTML = '<span class="spinner"></span> กำลังทำงาน';
+    titleEl.textContent = "กำลังเริ่ม…";
+    ptext.textContent = "กำลังอ่านข้อมูลจาก Google Sheet…";
+    setRunning(true);
+    panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    const qs = new URLSearchParams({ process, url }).toString();
+    source = new EventSource("/run?" + qs);
+    source.onmessage = (ev) => handle(JSON.parse(ev.data));
+    source.onerror = () => {
+      // Connection dropped after the stream ended, or a network problem.
+      if (source) source.close();
+      setRunning(false);
+    };
+  }
+
+  function handle(ev) {
+    switch (ev.type) {
+      case "open":
+        titleEl.textContent = ev.label;
+        break;
+
+      case "start":
+        if (ev.total === 0) {
+          ptext.textContent = "ไม่มีรายการที่ต้องประมวลผล (ไม่พบแถวที่สถานะถูกต้อง)";
+          bar.style.width = "100%";
+        } else {
+          ptext.textContent = "พบ " + ev.total + " รายการที่ต้องประมวลผล";
+          itemsWrap.hidden = false;
+        }
+        break;
+
+      case "item": {
+        const s = STATUS[ev.status] || { label: ev.status, cls: "badge" };
+        if (ev.status === "Success") counts.success++;
+        else if (ev.status === "OUT") counts.out++;
+        else counts.error++;
+        cSuccess.textContent = counts.success;
+        cOut.textContent = counts.out;
+        cError.textContent = counts.error;
+
+        const pct = Math.round((ev.index / ev.total) * 100);
+        bar.style.width = pct + "%";
+        ptext.textContent = "กำลังประมวลผล " + ev.index + " / " + ev.total + " (" + pct + "%)";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + ev.index + "</td>" +
+          "<td>" + escapeHtml(ev.name) + "</td>" +
+          "<td>" + escapeHtml(ev.sku || "-") + "</td>" +
+          '<td><span class="badge ' + s.cls + '">' + s.label + "</span></td>" +
+          "<td>" + escapeHtml(ev.message || "") + "</td>";
+        itemsBody.appendChild(tr);
+        itemsWrap.scrollTop = itemsWrap.scrollHeight;
+        break;
+      }
+
+      case "summary":
+        finish(ev);
+        break;
+
+      case "error":
+        titleEl.textContent = "เกิดข้อผิดพลาด";
+        stateEl.className = "badge badge-err";
+        stateEl.textContent = "ผิดพลาด";
+        ptext.textContent = "";
+        summaryBox.hidden = false;
+        summaryBox.innerHTML =
+          '<div class="result-banner banner-err">❌ รันไม่สำเร็จ: ' +
+          escapeHtml(ev.message) + "</div>";
+        if (source) source.close();
+        setRunning(false);
+        break;
+    }
+  }
+
+  function finish(ev) {
+    bar.style.width = "100%";
+    setRunning(false);
+    const ok = ev.error === 0;
+    const allDone = ev.total > 0;
+    stateEl.className = "badge " + (ok ? "badge-ok" : "badge-warn");
+    stateEl.textContent = ok ? "เสร็จสมบูรณ์" : "เสร็จ (มีปัญหาบางรายการ)";
+    bar.className = "progress-bar " + (ok ? "bar-ok" : "bar-warn");
+    ptext.textContent = "ประมวลผลครบ " + ev.total + " รายการ";
+
+    let line;
+    if (!allDone) {
+      line = "ℹ️ ไม่มีรายการที่ต้องประมวลผลในรอบนี้";
+    } else {
+      line =
+        (ok ? "✅ เสร็จสมบูรณ์: " : "⚠️ เสร็จแล้วแต่มีรายการที่ต้องตรวจสอบ: ") +
+        "สำเร็จ " + ev.success + " · ตีกลับ " + ev.out + " · ผิดพลาด " +
+        ev.error + " (จากทั้งหมด " + ev.total + " รายการ)";
+    }
+    const banner = !allDone ? "banner-info" : (ok ? "banner-ok" : "banner-warn");
+
+    summaryBox.hidden = false;
+    summaryBox.innerHTML =
+      '<div class="result-banner ' + banner + '">' + line + "</div>" +
+      '<p class="muted" style="margin-top:10px">' +
+      (ev.step === 1
+        ? "Barcode ถูกบันทึกไว้ในโฟลเดอร์ output/ — ดู transaction log ได้ที่หน้า Transactions"
+        : "อัปเดตสต็อกเข้า Loyverse แล้ว — ดู transaction log ได้ที่หน้า Transactions") +
+      "</p>";
+    if (source) source.close();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+})();
+</script>
+{% endblock %}

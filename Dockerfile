@@ -22,4 +22,9 @@ COPY . .
 # Output directories
 VOLUME ["/app/output"]
 
-CMD ["python", "loyverse_sync.py"]
+# Web UI (Flask app served by gunicorn)
+EXPOSE 5000
+
+# 1 worker, long timeout: a sync run is synchronous and may call the Loyverse
+# API many times for a large sheet.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--timeout", "600", "loyverse.web.app:app"]

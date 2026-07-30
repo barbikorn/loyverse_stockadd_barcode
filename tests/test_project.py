@@ -1,7 +1,7 @@
 """
-test_project.py -- Test suite for loyverseAPI
-Run from project root: python test_project.py
-Tests run without real Google Sheets or Loyverse API credentials
+test_project.py -- Test suite for the loyverse package
+Run from project root:  python tests/test_project.py
+Tests run without real Google Sheets or Loyverse API credentials.
 """
 import sys
 import os
@@ -10,6 +10,11 @@ import inspect
 import py_compile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+# Make the project root importable regardless of where this is run from.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"
@@ -51,13 +56,22 @@ def full_env(**extra) -> dict:
 # ─── 0. Syntax Check ──────────────────────────────────────────
 print("\n=== [0] Syntax Check ===")
 py_files = [
-    "config.py", "sheets_auth.py", "sheets.py",
-    "sheets_writer.py", "loyverse_api.py",
-    "sku_generator.py", "barcode_gen.py", "loyverse_sync.py"
+    "loyverse/config.py",
+    "loyverse/loyverse_api.py",
+    "loyverse/barcode_gen.py",
+    "loyverse/sku_generator.py",
+    "loyverse/shared_logic.py",
+    "loyverse/sheets/auth.py",
+    "loyverse/sheets/reader.py",
+    "loyverse/sheets/writer.py",
+    "loyverse/steps/step1_barcode_gen.py",
+    "loyverse/steps/step2_stock_update.py",
+    "loyverse/steps/legacy_sync.py",
+    "loyverse/web/app.py",
 ]
 for f in py_files:
     def _check(f=f):
-        py_compile.compile(f, doraise=True)
+        py_compile.compile(str(ROOT / f), doraise=True)
     test(f"Syntax: {f}", _check)
 
 
@@ -65,9 +79,9 @@ for f in py_files:
 print("\n=== [1] Config ===")
 
 def _load_config():
-    _reset("config")
+    _reset("loyverse.config")
     with patch.dict(os.environ, BASE_ENV):
-        import config
+        from loyverse import config
         assert config.LOYVERSE_TOKEN == "TEST_TOKEN"
         assert config.LOYVERSE_STORE_ID == ""   # optional — default empty
         assert config.SKU_DIGIT_PAD == 3
@@ -75,50 +89,47 @@ def _load_config():
         assert config.TRANSACTION_OUTPUT_MODE == "csv"
         assert config.TRANSACTION_SHEET_NAME == "Transactions"
         assert config.MAPPING_SHEET_NAME == "Mapping"
-test("config.py: loads all values, STORE_ID optional (defaults '')", _load_config)
+test("config: loads all values, STORE_ID optional (defaults '')", _load_config)
 
 def _store_id_optional():
     """Running without LOYVERSE_STORE_ID must NOT raise"""
-    _reset("config")
+    _reset("loyverse.config")
     env_no_store = {k: v for k, v in BASE_ENV.items() if k != "LOYVERSE_STORE_ID"}
     with patch.dict(os.environ, env_no_store, clear=True):
-        import config
+        from loyverse import config
         assert config.LOYVERSE_STORE_ID == ""
-test("config.py: LOYVERSE_STORE_ID is optional (no EnvironmentError)", _store_id_optional)
+test("config: LOYVERSE_STORE_ID is optional (no EnvironmentError)", _store_id_optional)
 
 def _missing_token():
-    """_require() must raise EnvironmentError when key is absent.
-    dotenv loads at module import-time, so we test _require directly."""
-    _reset("config")
-    # Temporarily intercept os.getenv inside config to simulate missing key
+    """_require() must raise EnvironmentError when key is absent."""
+    _reset("loyverse.config")
     original_getenv = os.getenv
     def fake_getenv(key, default=None):
         if key == "LOYVERSE_TOKEN":
             return None   # simulate missing
         return original_getenv(key, default)
     with patch("os.getenv", side_effect=fake_getenv):
-        # also clear any dotenv-loaded values by resetting environ for this key
         token_backup = os.environ.pop("LOYVERSE_TOKEN", None)
         try:
-            import config
+            from loyverse import config  # noqa: F401
             raise AssertionError("Should have raised EnvironmentError")
         except EnvironmentError as e:
             assert "LOYVERSE_TOKEN" in str(e)
         finally:
-            _reset("config")
+            _reset("loyverse.config")
             if token_backup:
                 os.environ["LOYVERSE_TOKEN"] = token_backup
-test("config.py: raises EnvironmentError when LOYVERSE_TOKEN missing", _missing_token)
+test("config: raises EnvironmentError when LOYVERSE_TOKEN missing", _missing_token)
 
 
 # ─── 2. SKU Generator ─────────────────────────────────────────
 print("\n=== [2] SKU Generator (pure logic) ===")
 
-_reset("config", "sku_generator", "sheets_auth")
-sys.modules["sheets_auth"] = MagicMock()
+_reset("loyverse.config", "loyverse.sku_generator", "loyverse.sheets.auth")
+sys.modules["loyverse.sheets.auth"] = MagicMock()
 with patch.dict(os.environ, BASE_ENV):
-    import config
-    import sku_generator
+    from loyverse import config
+    from loyverse import sku_generator
 
 def _first_item():
     assert sku_generator.get_next_sku("MM", None) == "MM001"
@@ -153,27 +164,27 @@ test("_extract_number: case-insensitive (mm010 matches MM) -> 10", _extract_case
 # ─── 3. Sheets Auth ───────────────────────────────────────────
 print("\n=== [3] Sheets Auth ===")
 
-_reset("sheets_auth", "config")
+_reset("loyverse.sheets.auth", "loyverse.config")
 with patch.dict(os.environ, BASE_ENV):
-    import config as _cfg
+    from loyverse import config as _cfg  # noqa: F401
 
 def _no_creds():
-    _reset("sheets_auth")
-    import sheets_auth
+    _reset("loyverse.sheets.auth")
+    from loyverse.sheets import auth as sheets_auth
     sheets_auth.get_client.cache_clear()
     try:
         sheets_auth.get_client()
         raise AssertionError("Should have raised FileNotFoundError")
     except FileNotFoundError as e:
-        assert "credentials" in str(e).lower() or "\u0e44\u0e21\u0e48\u0e1e\u0e1a" in str(e)
-test("sheets_auth: FileNotFoundError when credentials.json absent", _no_creds)
+        assert "credentials" in str(e).lower() or "ไม่พบ" in str(e)
+test("sheets.auth: FileNotFoundError when credentials.json absent", _no_creds)
 
 
 # ─── 4. Barcode Generator ─────────────────────────────────────
 print("\n=== [4] Barcode Generator ===")
 
-_reset("barcode_gen")
-import barcode_gen
+_reset("loyverse.barcode_gen")
+from loyverse import barcode_gen
 
 def _empty_sku():
     result = barcode_gen.generate("", Path(tempfile.mkdtemp()))
@@ -216,92 +227,74 @@ SAMPLE_RECORDS = [
     },
 ]
 
+
+def _write_with_csv(records, csv_path, timestamp):
+    env = full_env(TRANSACTION_CSV_PATH=str(csv_path), TRANSACTION_OUTPUT_MODE="csv")
+    with patch.dict(os.environ, env):
+        _reset("loyverse.config", "loyverse.sheets.writer")
+        from loyverse import config as _c  # noqa: F401
+        from loyverse.sheets import writer as sw
+        sw.write_results(records, timestamp)
+
+
 def _csv_creates_file():
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = Path(tmp) / "tx.csv"
-        env = full_env(TRANSACTION_CSV_PATH=str(csv_path), TRANSACTION_OUTPUT_MODE="csv")
-        with patch.dict(os.environ, env):
-            _reset("config", "sheets_writer")
-            import config as _c
-            import sheets_writer as sw
-            sw.write_results(SAMPLE_RECORDS, "20260311_130000")
+        _write_with_csv(SAMPLE_RECORDS, csv_path, "20260311_130000")
         assert csv_path.exists(), "CSV file was not created"
-test("sheets_writer (csv): creates CSV file", _csv_creates_file)
+test("sheets.writer (csv): creates CSV file", _csv_creates_file)
 
 def _csv_has_header():
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = Path(tmp) / "tx.csv"
-        env = full_env(TRANSACTION_CSV_PATH=str(csv_path), TRANSACTION_OUTPUT_MODE="csv")
-        with patch.dict(os.environ, env):
-            _reset("config", "sheets_writer")
-            import config as _c
-            import sheets_writer as sw
-            sw.write_results(SAMPLE_RECORDS, "20260311_130000")
+        _write_with_csv(SAMPLE_RECORDS, csv_path, "20260311_130000")
         with open(csv_path, encoding="utf-8-sig") as f:
             first_line = f.readline().strip()
         assert "Timestamp" in first_line and "Product Name" in first_line, \
             f"Header missing: {first_line}"
-test("sheets_writer (csv): header row written correctly", _csv_has_header)
+test("sheets.writer (csv): header row written correctly", _csv_has_header)
 
 def _csv_row_count():
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = Path(tmp) / "tx.csv"
-        env = full_env(TRANSACTION_CSV_PATH=str(csv_path), TRANSACTION_OUTPUT_MODE="csv")
-        with patch.dict(os.environ, env):
-            _reset("config", "sheets_writer")
-            import config as _c
-            import sheets_writer as sw
-            sw.write_results(SAMPLE_RECORDS, "20260311_130000")
+        _write_with_csv(SAMPLE_RECORDS, csv_path, "20260311_130000")
         with open(csv_path, encoding="utf-8-sig") as f:
             lines = f.readlines()
         assert len(lines) == 4, f"Expected 4 lines (header+3 data), got {len(lines)}"
-test("sheets_writer (csv): correct row count (header + 3 data)", _csv_row_count)
+test("sheets.writer (csv): correct row count (header + 3 data)", _csv_row_count)
 
 def _csv_append():
     """Second write_results call appends, does not overwrite"""
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = Path(tmp) / "tx.csv"
-        env = full_env(TRANSACTION_CSV_PATH=str(csv_path), TRANSACTION_OUTPUT_MODE="csv")
-        with patch.dict(os.environ, env):
-            _reset("config", "sheets_writer")
-            import config as _c
-            import sheets_writer as sw
-            sw.write_results(SAMPLE_RECORDS[:1], "20260311_130000")
-            _reset("config", "sheets_writer")
-            import config as _c2
-            import sheets_writer as sw2
-            sw2.write_results(SAMPLE_RECORDS[1:], "20260311_140000")
+        _write_with_csv(SAMPLE_RECORDS[:1], csv_path, "20260311_130000")
+        _write_with_csv(SAMPLE_RECORDS[1:], csv_path, "20260311_140000")
         with open(csv_path, encoding="utf-8-sig") as f:
             lines = f.readlines()
         # header(1) + run1(1) + run2(2) = 4 lines
         assert len(lines) == 4, f"Expected 4 lines on append, got {len(lines)}"
-test("sheets_writer (csv): appends on second run (no overwrite)", _csv_append)
+test("sheets.writer (csv): appends on second run (no overwrite)", _csv_append)
 
 def _csv_error_row_included():
     """Error rows must also be written to CSV"""
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = Path(tmp) / "tx.csv"
-        env = full_env(TRANSACTION_CSV_PATH=str(csv_path), TRANSACTION_OUTPUT_MODE="csv")
-        with patch.dict(os.environ, env):
-            _reset("config", "sheets_writer")
-            import config as _c
-            import sheets_writer as sw
-            sw.write_results(SAMPLE_RECORDS, "20260311_130000")
+        _write_with_csv(SAMPLE_RECORDS, csv_path, "20260311_130000")
         with open(csv_path, encoding="utf-8-sig") as f:
             content = f.read()
         assert "Error" in content, "Error status not found in CSV"
         assert "Category not found" in content
-test("sheets_writer (csv): error rows included in CSV", _csv_error_row_included)
+test("sheets.writer (csv): error rows included in CSV", _csv_error_row_included)
 
 
 # ─── 6. loyverse_api ──────────────────────────────────────────
 print("\n=== [6] loyverse_api: structure & STORE_ID handling ===")
 
-_reset("loyverse_api", "config")
-sys.modules["sheets_auth"] = MagicMock()
+_reset("loyverse.loyverse_api", "loyverse.config")
+sys.modules["loyverse.sheets.auth"] = MagicMock()
 with patch.dict(os.environ, BASE_ENV):
-    import config as _cfg2
-    import loyverse_api as lv
+    from loyverse import config as _cfg2  # noqa: F401
+    from loyverse import loyverse_api as lv
 
 def _fn_exists():
     required = [
@@ -329,10 +322,10 @@ def _update_stock_no_store_id():
         mock_resp.raise_for_status = lambda: None
         return mock_resp
 
-    _reset("loyverse_api", "config")
+    _reset("loyverse.loyverse_api", "loyverse.config")
     with patch.dict(os.environ, full_env(LOYVERSE_STORE_ID="")):
-        import config as _c3
-        import loyverse_api as lv3
+        from loyverse import config as _c3  # noqa: F401
+        from loyverse import loyverse_api as lv3
         with patch.object(lv3, "_post", side_effect=mock_post), \
              patch.object(lv3, "get_current_stock", return_value=5.0):
             lv3.update_stock("FAKE_VARIANT", 3)
@@ -349,10 +342,10 @@ def _create_item_no_store_id():
         mock_resp.status_code = 201
         return mock_resp
 
-    _reset("loyverse_api", "config")
+    _reset("loyverse.loyverse_api", "loyverse.config")
     with patch.dict(os.environ, full_env(LOYVERSE_STORE_ID="")):
-        import config as _c4
-        import loyverse_api as lv4
+        from loyverse import config as _c4  # noqa: F401
+        from loyverse import loyverse_api as lv4
         with patch.object(lv4, "_post", side_effect=mock_post):
             lv4.create_item("Test Item", "MM001", 5)
     store_entry = captured["payload"]["variants"][0]["stores"][0]

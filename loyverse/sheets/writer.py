@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-import config
+from loyverse import config
 
 _HEADERS = [
     "Timestamp",
@@ -70,7 +70,7 @@ def _write_csv(records: list[dict], timestamp: str) -> None:
 # ─── Google Sheets writer ─────────────────────────────────────
 
 def _write_sheets(records: list[dict], timestamp: str) -> None:
-    import sheets_auth
+    from loyverse.sheets import auth as sheets_auth
 
     if not config.TRANSACTION_SHEET_URL:
         print("⚠️  TRANSACTION_SHEET_URL ไม่ได้ตั้งค่า — ข้าม write-back")

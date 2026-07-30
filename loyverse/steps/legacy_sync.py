@@ -5,7 +5,7 @@ loyverse_sync.py — Main pipeline
      a. ถ้าพบสินค้าแล้ว (SKU หรือชื่อ) → update stock
      b. ถ้าไม่พบ (NEW ITEM):
         - ตรวจ category column
-        - ค้นหา category ใน Loyverse (ถ้าไม่มี → สร้างใหม่)
+        - ค้นหา category ใน Loyverse (ถ้าไม่มี → Status OUT)
         - ค้นหา prefix จาก Mapping Sheet
         - auto-increment SKU
         - สร้างสินค้าใหม่พร้อม category
@@ -19,12 +19,13 @@ from pathlib import Path
 
 import pandas as pd
 
-import config
-import sheets
-import loyverse_api as lv
-import barcode_gen
-import sku_generator
-import sheets_writer
+from loyverse import config
+from loyverse.sheets import reader as sheets
+from loyverse import loyverse_api as lv
+from loyverse import barcode_gen
+from loyverse import sku_generator
+from loyverse.sheets import writer as sheets_writer
+from loyverse import shared_logic
 
 
 # ─── Per-row processing ───────────────────────────────────────
@@ -51,17 +52,11 @@ def _process_row(row: dict, barcode_dir: Path) -> dict:
     }
 
     # ── 0. Validate required fields ───────────────────────────
-    missing = []
-    if not p_name:
-        missing.append("Name")
-    if not p_cat:
-        missing.append("Category")
-    if not add_qty:
-        missing.append("Quantity Added")
+    missing = shared_logic.get_missing_required_fields(row)
     if missing:
-        result["Status"]       = "Error"
-        result["Detail/Error"] = f"Required fields missing: {', '.join(missing)}"
-        icon = "❌"
+        result["Status"] = "OUT"
+        result["Detail/Error"] = shared_logic.missing_fields_message(missing)
+        icon = "⚠️"
         print(f"{icon} {p_name or '(no name)'} | SKU: {result['SKU']} | {result['Detail/Error']}")
         return result
 
@@ -92,12 +87,8 @@ def _process_row(row: dict, barcode_dir: Path) -> dict:
                 result["Action"] = "Update Stock (Found by Name+Category)"
 
         # ── 4. Price mismatch check ────────────────────────────
-        if variant_id and p_price > 0 and f_price > 0:
-            if abs(p_price - f_price) > 0.01:
-                raise ValueError(
-                    f"ราคาไม่ตรงกัน — Sheet: {p_price:,.2f} ≠ ระบบ: {f_price:,.2f} บาท "
-                    f"(แก้ราคาใน Sheet ให้ตรงกับระบบ หรืออัปเดตราคาในระบบก่อน)"
-                )
+        if variant_id:
+            lv.assert_price_matches(p_price, f_price)
 
         # ── 5. ตั้งค่าราคา/variant สำหรับ barcode ────────────
         if not current_price and f_price > 0:
@@ -114,14 +105,13 @@ def _process_row(row: dict, barcode_dir: Path) -> dict:
         else:
             # ── 7. NEW ITEM flow ───────────────────────────────
 
-            # 7a. ตรวจว่า category มีใน Loyverse ไหม (auto-create ถ้าไม่มี)
+            # 7a. ตรวจว่า category มีใน Loyverse ไหม (ไม่สร้างใหม่)
             if cat_id is None:
-                print(f"⚠️  Category '{p_cat}' ไม่พบใน Loyverse — กำลังสร้างใหม่...")
-                try:
-                    cat_id = lv.create_category(p_cat)
-                    print(f"✅ สร้าง Category '{p_cat}' สำเร็จ (ID: {cat_id})")
-                except Exception as e:
-                    raise ValueError(f"สร้าง Category '{p_cat}' ไม่สำเร็จ: {e}")
+                result["Status"] = "OUT"
+                result["Detail/Error"] = f"Category '{p_cat}' not found in Loyverse"
+                icon = "⚠️"
+                print(f"{icon} {p_name} | SKU: {result['SKU']} | {result['Detail/Error']}")
+                return result
 
             result["Category"] = p_cat
 
@@ -159,8 +149,8 @@ def _process_row(row: dict, barcode_dir: Path) -> dict:
         result["Status"]       = "Error"
         result["Detail/Error"] = str(e)
 
-    icon = "✅" if result["Status"] == "Success" else "❌"
-    msg = result["Detail/Error"] if result["Status"] == "Error" else (result["Action"] or result["Detail/Error"])
+    icon = "✅" if result["Status"] == "Success" else ("⚠️" if result["Status"] == "OUT" else "❌")
+    msg = result["Detail/Error"] if result["Status"] in ("Error", "OUT") else (result["Action"] or result["Detail/Error"])
     print(f"{icon} {p_name} | SKU: {result['SKU']} | {msg}")
     return result
 
@@ -171,37 +161,33 @@ def run() -> None:
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(config.OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    barcode_dir = output_dir / f"{config.BARCODE_OUTPUT_DIR_PREFIX}_{timestamp}"
-    barcode_dir.mkdir(parents=True, exist_ok=True)
-
-    # NEW: Unpack worksheet and data with row index
-    ws, input_data = sheets.fetch_input_records()
-    
-    # NEW: Get column indices for status update
-    status_col_idx = sheets.get_or_create_col_index(ws, config.SHEET_COL_STATUS)
-    msg_col_idx = sheets.get_or_create_col_index(ws, config.SHEET_COL_MESSAGE)
+    file_name, input_data = sheets.fetch_input_records()
+    barcode_dir = config.get_barcode_output_dir(file_name)
+    col_cache: dict[int, dict[str, int]] = {}
 
     print(f"📁 โฟลเดอร์ barcode: {barcode_dir.resolve()}\n")
 
     report = []
-    for row_idx, row in input_data:
-        # Check if already synced
+    for ws, row_idx, row in input_data:
+        ws_id = id(ws)
+        if ws_id not in col_cache:
+            col_cache[ws_id] = sheets.get_output_column_indices(ws)
+        cols = col_cache[ws_id]
+
         if row.get("status") == "Success":
             print(f"⏩ ข้าม {row['product_name']} (Status: Success)")
             continue
 
         result = _process_row(row, barcode_dir)
         report.append(result)
-        
-        # Update status back to sheet
+
         sheets.update_row_status(
-            ws, 
-            row_idx, 
-            status_col_idx, 
-            msg_col_idx, 
-            result["Status"], 
-            result["Detail/Error"] or result["Action"]
+            ws,
+            row_idx,
+            cols["status"],
+            cols["message"],
+            result["Status"],
+            result["Detail/Error"] or result["Action"],
         )
 
     # ── Export local Excel ─────────────────────────────────────

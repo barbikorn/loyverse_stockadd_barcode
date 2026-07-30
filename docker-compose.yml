@@ -1,14 +1,17 @@
 services:
-  loyverse-sync:
+  loyverse-ui:
     build: .
-    container_name: loyverse_sync
+    container_name: loyverse_ui
     # โหลด secrets จาก .env (ไม่ embed ใน image)
     env_file:
       - .env
+    ports:
+      # เปิด Web UI ที่ http://localhost:5000
+      - "5000:5000"
     volumes:
       # credentials.json (Service Account key)
       - ./credentials.json:/app/credentials.json:ro
-      # output: barcodes + Excel reports จะถูก save ที่นี่
+      # output: barcodes + reports จะถูก save ที่นี่
       - ./output:/app/output
-    # รัน แล้วหยุดเมื่อเสร็จ (ไม่ใช่ long-running service)
-    restart: "no"
+    # long-running web service — รีสตาร์ทเองถ้า container ล้ม
+    restart: unless-stopped

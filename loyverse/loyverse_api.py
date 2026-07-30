@@ -6,7 +6,7 @@ from functools import lru_cache
 
 import requests
 
-import config
+from loyverse import config
 
 _HEADERS = {
     "Authorization": f"Bearer {config.LOYVERSE_TOKEN}",
@@ -63,6 +63,35 @@ def _get_default_store_id() -> str:
 
 
 # ─── Categories ───────────────────────────────────────────────
+
+class CategoryNotFoundError(Exception):
+    """Category ไม่มีใน Loyverse — ไม่สร้างให้อัตโนมัติ"""
+
+    def __init__(self, category_name: str):
+        self.category_name = category_name
+        super().__init__(f"Category '{category_name}' not found in Loyverse")
+
+
+class PriceMismatchError(Exception):
+    """ราคาใน Sheet ไม่ตรงกับราคาใน Loyverse"""
+
+    def __init__(self, sheet_price: float, system_price: float):
+        self.sheet_price = sheet_price
+        self.system_price = system_price
+        super().__init__(format_price_mismatch(sheet_price, system_price))
+
+
+def format_price_mismatch(sheet_price: float, system_price: float) -> str:
+    return (
+        f"ราคาไม่ตรงกัน — Sheet: {sheet_price:,.2f} ≠ ระบบ: {system_price:,.2f} บาท "
+        f"(แก้ราคาใน Sheet ให้ตรงกับระบบ หรืออัปเดตราคาในระบบก่อน)"
+    )
+
+
+def assert_price_matches(sheet_price: float, system_price: float) -> None:
+    if sheet_price > 0 and system_price > 0 and abs(sheet_price - system_price) > 0.01:
+        raise PriceMismatchError(sheet_price, system_price)
+
 
 def get_all_categories() -> dict[str, str]:
     """คืน dict: {category_name_lower → category_id} (รองรับ pagination)"""
@@ -317,3 +346,54 @@ def create_category(name: str) -> str:
             return cat_id
         raise Exception(f"Failed to create category '{name}': {res.text}")
     return res.json()["id"]
+
+
+def ensure_item_exists(
+    product_name: str,
+    sku: str | None,
+    category_name: str,
+    price: float = 0.0
+) -> tuple[str, str, float, str]:
+    """
+    ตรวจสอบว่าสินค้ามีอยู่แล้วหรือไม่ (ค้นหาจาก SKU หรือ ชื่อ+Category)
+    ถ้าไม่มีจะสร้างใหม่โดยใช้ Auto SKU และสต็อกเริ่มต้นเป็น 0
+    คืน (variant_id, sku, price, variant_name)
+    """
+    from loyverse import sku_generator
+
+    # 1. หา category_id (ไม่สร้างใหม่ถ้าไม่พบ)
+    cat_id = find_category_id(category_name)
+    if not cat_id:
+        raise CategoryNotFoundError(category_name)
+
+    # 2. ค้นหาด้วย SKU (ถ้ามี)
+    if sku:
+        found = find_variant_by_sku(sku)
+        if found:
+            assert_price_matches(price, found[2])
+            return found
+
+    # 3. ค้นหาด้วยชื่อ + category
+    found = find_variant_by_name(product_name, category_id=cat_id)
+    if found:
+        assert_price_matches(price, found[2])
+        return found
+
+    # 4. ถ้าไม่พบ ให้สร้างใหม่
+    # หา prefix และ auto-increment SKU
+    prefix = sku_generator.get_prefix_for_category(category_name)
+    if not prefix:
+        raise ValueError(f"ไม่พบ prefix สำหรับ category '{category_name}' ใน Mapping Sheet")
+    
+    last_sku = get_last_sku_in_category(cat_id, prefix)
+    auto_sku = sku_generator.get_next_sku(prefix, last_sku)
+    
+    print(f"🆕 กำลังสร้างสินค้าใหม่: {product_name} (SKU: {auto_sku})")
+    create_item(product_name, auto_sku, initial_qty=0, category_id=cat_id, price=price)
+    
+    # ค้นหาอีกรอบเพื่อเอา variant_id
+    found = find_variant_by_sku(auto_sku)
+    if not found:
+        raise Exception(f"สร้างสินค้าสำเร็จแต่ค้นหาไม่พบ: {auto_sku}")
+        
+    return found

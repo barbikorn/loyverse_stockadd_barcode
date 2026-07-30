@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Transactions · Loyverse Sync{% endblock %}
+{% block content %}
+<div class="card">
+  <form method="get">
+    <label for="url">Transaction Google Sheet URL</label>
+    <input type="url" id="url" name="url" value="{{ url }}"
+           placeholder="https://docs.google.com/spreadsheets/d/..." required>
+    <div class="btn-row">
+      <button class="btn btn-1" type="submit">↻ โหลดข้อมูล</button>
+    </div>
+  </form>
+</div>
+
+{% if error %}
+<div class="card"><pre class="err">{{ error }}</pre></div>
+{% elif url and headers %}
+<div class="card">
+  <h3 style="margin-top:0">Transactions <span class="muted">({{ rows|length }} แถว · ใหม่สุดอยู่บน)</span></h3>
+  <div class="scroll">
+    <table>
+      <thead><tr>{% for h in headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% elif url %}
+<div class="card"><p class="muted">ไม่พบข้อมูลใน Sheet นี้</p></div>
+{% endif %}
+{% endblock %}

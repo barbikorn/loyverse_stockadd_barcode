@@ -1,6 +1,62 @@
 # loyverseAPI
 
 > ระบบ sync สินค้าจาก **Google Sheet → Loyverse POS** พร้อม auto-SKU, barcode generation และ transaction log
+> ใช้งานได้ทั้งแบบ **Web UI** และ **Command Line**
+
+---
+
+## How to Use (วิธีใช้งานแบบเร็ว)
+
+มี 3 วิธีให้เลือกใช้:
+
+| วิธี | เหมาะกับ | คำสั่ง |
+|---|---|---|
+| 🐳 **Docker (แนะนำ)** | รัน Web UI ง่ายสุด ไม่ต้องลง Python | `docker compose up --build` |
+| 🌐 **Web UI** | ใช้งานผ่านหน้าเว็บ | `python app.py` |
+| ⌨️ **CLI** | รันแบบ script / อัตโนมัติ | `python step1_barcode_gen.py` |
+
+### ก่อนเริ่ม (ทุกวิธีต้องมี)
+1. คัดลอก `.env.example` → `.env` แล้วใส่ค่า `LOYVERSE_TOKEN` และ `MAPPING_SHEET_URL`
+2. วางไฟล์ `credentials.json` (Google Service Account key) ไว้ใน root ของโปรเจกต์
+3. Share Google Sheet ทุกไฟล์ให้ `client_email` ใน `credentials.json` (สิทธิ์ Editor)
+
+> 💡 Web UI จะให้กรอก **URL ของ Input Sheet** ในหน้าเว็บโดยตรง ไม่จำเป็นต้องตั้ง `INPUT_SHEET_URL` ใน `.env`
+
+---
+
+## 🌐 Web UI
+
+หน้าเว็บมี 2 หน้า:
+
+### หน้า 1 — Input / Run (`/`)
+1. วาง **URL ของ Google Sheet (Input Data)**
+2. กดปุ่มเลือก process:
+   - **Process 1 · สร้างสินค้า + Barcode** → รัน Step 1 (สร้างสินค้า stock 0 + barcode)
+   - **Process 2 · อัปเดตสต็อก** → รัน Step 2 (เพิ่มสต็อกจริง)
+3. ระหว่างรันจะเห็น **progress แบบ real-time**: แถบความคืบหน้า (กี่/ทั้งหมด),
+   รายการที่ทำเสร็จทีละแถวพร้อมสถานะ (สำเร็จ / ตีกลับ / ผิดพลาด),
+   และเมื่อจบจะมี **การ์ดสรุปผล** บอกชัดเจนว่าสำเร็จกี่รายการ ตีกลับกี่ ผิดพลาดกี่ จากทั้งหมดเท่าไร
+   (ทำงานผ่าน Server-Sent Events — ไม่ต้องรีเฟรชหน้า)
+
+### หน้า 2 — Transactions (`/transactions`)
+- วาง **URL ของ Transaction Google Sheet** เพื่อดู transaction log แบบตาราง (รายการใหม่สุดอยู่บน)
+
+### รันด้วย Docker (แนะนำ)
+```bash
+docker compose up --build
+# เปิด http://localhost:5000
+```
+- `.env`, `credentials.json`, และโฟลเดอร์ `output/` จะถูก mount เข้า container อัตโนมัติ
+- barcode ที่ generate จะถูกบันทึกลง `output/` บนเครื่อง host
+
+### รันด้วย Python (ไม่ใช้ Docker)
+```bash
+pip install -r requirements.txt
+python -m loyverse.web.app
+# เปิด http://127.0.0.1:5000
+```
+
+> ⚠️ Web UI ยังไม่มีระบบ login — รันบน localhost เท่านั้น อย่าเปิดออก public โดยไม่ใส่ authentication ก่อน
 
 ---
 
@@ -9,115 +65,86 @@
 ```
 loyverseAPI/
 │
-├── .env                    ← ค่า config จริง (ห้าม commit ใน git)
-├── .env.example            ← template .env สำหรับ setup
+├── .env                       ← ค่า config จริง (ห้าม commit ใน git)
+├── .env.example               ← template .env สำหรับ setup
 ├── .gitignore
-│
-├── config.py               ← อ่าน .env และ export ค่า config ทั้งหมด
-│                             (module นี้คือตัวกลางที่ทุก module อ่านค่าจาก)
-│
-├── sheets_auth.py          ← Google Service Account authentication (gspread)
-├── sheets.py               ← อ่านข้อมูลจาก Input Sheet
-├── sheets_writer.py        ← เขียน transaction log → CSV หรือ Google Sheet
-│
-├── loyverse_api.py         ← Loyverse REST API wrapper
-│                             (categories, items, inventory, SKU lookup)
-│
-├── sku_generator.py        ← Auto-generate SKU จาก prefix + running number
-├── barcode_gen.py          ← สร้าง barcode PNG จาก SKU
-├── loyverse_sync.py        ← Main pipeline — รันตรงนี้
-│
-├── test_project.py         ← Test suite (31 tests, ไม่ต้องใช้ API จริง)
-│
-├── Dockerfile
-├── docker-compose.yml
 ├── requirements.txt
+├── Dockerfile                 ← image สำหรับรัน Web UI (gunicorn)
+├── docker-compose.yml         ← รัน Web UI ด้วย docker compose
 │
-├── docs/
-│   └── api_doc.txt         ← Loyverse API reference
+├── loyverse/                  ← Python package หลักของระบบ
+│   ├── config.py              ← อ่าน .env และ export ค่า config ทั้งหมด
+│   ├── loyverse_api.py        ← Loyverse REST API wrapper
+│   ├── sku_generator.py       ← Auto-generate SKU จาก prefix + running number
+│   ├── barcode_gen.py         ← สร้าง barcode PNG จาก SKU
+│   ├── shared_logic.py        ← Logic กลางที่ใช้ร่วมกันทั้ง 2 step
+│   ├── diagnostics.py         ← ตรวจสอบสิทธิ์ Google Sheets (เดิม check_auth.py)
+│   │
+│   ├── assets/fonts/          ← ฟอนต์สำหรับ barcode (Helvetica.ttf)
+│   │
+│   ├── sheets/                ← ทุกอย่างที่เกี่ยวกับ Google Sheets
+│   │   ├── auth.py            ← Service Account authentication (gspread)
+│   │   ├── reader.py          ← อ่านข้อมูลจาก Input Sheet
+│   │   └── writer.py          ← เขียน transaction log → CSV หรือ Google Sheet
+│   │
+│   ├── steps/
+│   │   ├── step1_barcode_gen.py   ← Step 1: สร้างสินค้า (สต็อก 0) + Barcode
+│   │   ├── step2_stock_update.py  ← Step 2: อัปเดตสต็อกจริงเข้าระบบ
+│   │   └── legacy_sync.py         ← (Legacy) รันแบบขั้นตอนเดียว
+│   │
+│   └── web/                   ← Flask Web UI
+│       ├── app.py             ← หน้า Input/Run + Transactions
+│       └── templates/         ← HTML templates
 │
-└── output/                 ← ไฟล์ที่ generate (auto-created)
-    ├── transactions.csv    ← transaction log (append ทุกครั้งที่รัน)
-    ├── loyverse_sync_report_YYYYMMDD_HHMMSS.xlsx
-    └── barcodes_YYYYMMDD_HHMMSS/
-        └── {SKU}.png
+├── tests/test_project.py      ← test suite (รันโดยไม่ต้องมี credential จริง)
+├── tools/dump_items.py        ← script เสริม dump สินค้า/SKU ทั้งหมด (standalone)
+├── docs/                      ← เอกสารอ้างอิง API
+│
+└── output/                    ← ไฟล์ที่ generate (auto-created)
+    ├── transactions.csv       ← transaction log (append ทุกครั้งที่รัน)
+    └── {YYYYMMDD}/{ชื่อไฟล์ Sheet}/{SKU}.png
 ```
 
 ---
 
-## How It Works
+## How It Works (Two-Step Process)
 
-```
-[Google Sheet: Input]
-  product_name | sku | total_number | category
-        ↓
-[loyverse_sync.py] per row:
-  ├─ มี SKU?  → find by SKU → update stock
-  ├─ มีชื่อ?  → find by name → update stock
-  └─ ใหม่?   → validate category → get prefix from Mapping Sheet
-              → auto-generate SKU (e.g. MM001)
-              → create item in Loyverse
-        ↓
-[output/]
-  ├─ transactions.csv (or Google Sheet)
-  ├─ report .xlsx
-  └─ barcodes/*.png
-```
+ระบบแบ่งการทำงานออกเป็น 2 ขั้นตอน เพื่อให้สอดคล้องกับ Physical Flow ของการรับสินค้า:
+
+### Step 1: Barcode Generation (`step1_barcode_gen.py`)
+1. อ่านแถวที่มีสถานะเป็น **PENDING** (หรือว่าง)
+2. ตรวจสอบสินค้าใน Loyverse:
+   - ถ้ายังไม่มี: สร้างสินค้าใหม่ (Auto SKU) โดยตั้ง **สต็อกเริ่มต้นเป็น 0**
+   - ถ้ามีแล้ว: ดึงข้อมูล SKU เดิม
+3. สร้างไฟล์ Barcode PNG พร้อมรายละเอียดสินค้า
+4. อัปเดต SKU กลับไปที่ Sheet และเปลี่ยนสถานะเป็น **BARCODE_READY**
+
+### Step 2: Stock Update (`step2_stock_update.py`)
+1. อ่านแถวที่มีสถานะเป็น **BARCODE_READY**
+2. อัปเดตจำนวนสต็อก (Add Quantity) เข้าสู่ระบบ Loyverse ตามจำนวนในช่อง `total_number`
+3. เปลี่ยนสถานะเป็น **COMPLETED**
 
 ---
 
-## Quick Setup
+## Google Sheets Setup
 
-### 1. ติดตั้ง dependencies
+### 1. Input Sheet
+สร้าง Google Sheet มี header row ดังนี้:
 
-```bash
-pip install -r requirements.txt
-```
+| product_name | sku | total_number | category | Price | Status | Message | Process_State |
+|---|---|---|---|---|---|---|---|
+| เสื้อยืดขาว |  | 10 | เสื้อผ้า | 250 | | | PENDING |
 
-### 2. ตั้งค่า .env
+- **Process_State**: คอลัมน์สำหรับควบคุมขั้นตอน (PENDING -> BARCODE_READY -> COMPLETED)
+- **Status / Message**: ระบบจะเขียนผลลัพธ์การทำงานกลับมาให้
 
-```bash
-# Windows
-copy .env.example .env
-
-# Mac / Linux
-cp .env.example .env
-```
-
-แก้ไข `.env`:
-
-```env
-# จำเป็นต้องใส่
-LOYVERSE_TOKEN=<token จาก Loyverse Back Office → Settings → API>
-INPUT_SHEET_URL=<URL ของ Google Sheet ที่เป็น Input>
-MAPPING_SHEET_URL=<URL ของ Google Sheet ที่เก็บ category→prefix mapping>
-
-# Transaction output (เลือกหนึ่งอย่าง)
-TRANSACTION_OUTPUT_MODE=csv         # ← ไม่ต้องใช้ credentials (แนะนำ)
-# TRANSACTION_OUTPUT_MODE=sheets    # ← ต้องใช้ credentials.json
-```
-
-### 3. Google Sheets Setup
-
-#### 3a. Input Sheet
-สร้าง Google Sheet มี header row:
-
-| product_name | sku | total_number | category |
-|---|---|---|---|
-| เสื้อยืดขาว | MM001 | 10 | เสื้อผ้า |
-| ข้าวผัด |  | 5 | อาหาร |
-
-- **มี SKU** → ค้นหาใน Loyverse แล้ว update stock
-- **ไม่มี SKU** → สร้างสินค้าใหม่พร้อม auto-generate SKU
-
-#### 3b. Mapping Sheet
+### 2. Mapping Sheet
 สร้าง Google Sheet แล้วสร้าง tab ชื่อ `Mapping`:
 
 | category | prefix |
 |---|---|
 | เสื้อผ้า | MM |
 | อาหาร | FD |
-| เครื่องดื่ม | BV |
 
 #### 3c. ถ้าใช้ Private Sheet (TRANSACTION_OUTPUT_MODE=sheets)
 
@@ -128,60 +155,37 @@ TRANSACTION_OUTPUT_MODE=csv         # ← ไม่ต้องใช้ credent
 
 ---
 
-## Running
+## Running (CLI)
 
-### Local
+ทางเลือกสำหรับรันแบบ command line (ใช้ `INPUT_SHEET_URL` จาก `.env`):
 
+### 1. ติดตั้ง Dependencies
 ```bash
-python loyverse_sync.py
+pip install -r requirements.txt
 ```
 
-### Docker
+รันแบบ module จาก root ของโปรเจกต์ (`-m`):
 
+### 2. ขั้นตอนที่ 1: สร้างสินค้าและ Barcode
+รันคำสั่งนี้เมื่อต้องการสร้างสินค้าใหม่ในระบบและพิมพ์ Barcode:
 ```bash
-# ครั้งแรก (หรือหลังแก้ code)
-docker compose up --build
-
-# ครั้งต่อไป
-docker compose up
-
-# ดู log
-docker compose logs -f
+python -m loyverse.steps.step1_barcode_gen
 ```
 
-### Run Tests
-
+### 3. ขั้นตอนที่ 2: อัปเดตสต็อกเมื่อรับสินค้า
+รันคำสั่งนี้เมื่อตรวจรับสินค้าจริงเรียบร้อยแล้ว:
 ```bash
-python test_project.py
-```
-> ไม่ต้องใช้ Loyverse API จริง หรือ credentials.json จริง
-
----
-
-## SKU Format
-
-- **Format**: `{prefix}{3-digit number}` เช่น `MM001`, `FD042`
-- **Prefix** → มาจาก Mapping Sheet ตาม category
-- **Auto-increment**: ดึง SKU ล่าสุดใน category แล้ว +1
-- **First item**: เริ่มที่ `001`
-
-```
-category: "เสื้อผ้า" → prefix: "MM"
-ไม่มีสินค้าก่อน → SKU = MM001
-มี MM001, MM002 → SKU = MM003
+python -m loyverse.steps.step2_stock_update
 ```
 
----
+### คำสั่งเสริม
+```bash
+python -m loyverse.diagnostics      # ตรวจสอบสิทธิ์ Google Sheets
+python tests/test_project.py        # รัน test suite
+```
 
-## Output Files
-
-ทุกการรันจะสร้างไฟล์ใน `output/`:
-
-| ไฟล์ | คำอธิบาย |
-|---|---|
-| `transactions.csv` | log ทุก row (Success + Error) — append ทุกครั้งที่รัน |
-| `loyverse_sync_report_*.xlsx` | Excel summary ของ run นั้น |
-| `barcodes_*/{SKU}.png` | barcode PNG สำหรับ print |
+> Web UI กับ CLI ใช้ logic เดียวกัน (`loyverse/steps/`) —
+> ต่างกันแค่ Web UI รับ URL จากหน้าเว็บ ส่วน CLI อ่านจาก `.env`
 
 ---
 
@@ -192,11 +196,9 @@ category: "เสื้อผ้า" → prefix: "MM"
 | `LOYVERSE_TOKEN` | ✅ | — | API token จาก Loyverse Back Office |
 | `INPUT_SHEET_URL` | ✅ | — | URL ของ Input Google Sheet |
 | `MAPPING_SHEET_URL` | ✅ | — | URL ของ Mapping Google Sheet |
+| `SHEET_COL_STATE` | ❌ | `Process_State` | ชื่อคอลัมน์สำหรับเก็บสถานะ (State) |
 | `LOYVERSE_STORE_ID` | ❌ | `""` | Store ID (ถ้าไม่ใส่จะ apply ทุก store) |
 | `TRANSACTION_OUTPUT_MODE` | ❌ | `csv` | `csv` หรือ `sheets` |
-| `TRANSACTION_CSV_PATH` | ❌ | `output/transactions.csv` | path ของ CSV log |
-| `TRANSACTION_SHEET_URL` | ❌ | — | URL สำหรับ sheets mode เท่านั้น |
-| `GOOGLE_CREDENTIALS_FILE` | ❌ | `credentials.json` | path ของ Service Account key |
 | `SKU_DIGIT_PAD` | ❌ | `3` | จำนวนหลักของ running number |
 | `OUTPUT_DIR` | ❌ | `output` | folder สำหรับ output ทั้งหมด |
 
@@ -211,3 +213,4 @@ category: "เสื้อผ้า" → prefix: "MM"
 | `Category not found in Loyverse` | category ใน Sheet ไม่ตรงกับ Loyverse | ตรวจสอบชื่อ category ให้ตรงกัน |
 | `prefix not found in Mapping Sheet` | category ไม่ได้ map prefix ใน Mapping Sheet | เพิ่ม row ใน Mapping Sheet |
 | `403 Forbidden` (gspread) | Service account ไม่ได้รับ share sheet | Share sheet ให้ `client_email` เป็น Editor |
+| `Row skipped` | `Process_State` ไม่ถูกต้อง | ตรวจสอบว่าแถวที่ต้องการรันมีสถานะเป็น `PENDING` (สำหรับ Step 1) หรือ `BARCODE_READY` (สำหรับ Step 2) |

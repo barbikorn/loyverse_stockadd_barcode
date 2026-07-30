@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tests/test_project.py)",
+      "Bash(python -m loyverse.diagnostics)",
+      "Bash(python -m loyverse.steps.step1_barcode_gen)",
+      "Bash(python -m loyverse.steps.step2_stock_update)",
+      "Bash(python -m loyverse.web.app)",
+      "Bash(pip install -r requirements.txt)",
+      "Bash(docker compose build:*)",
+      "Bash(docker compose up:*)",
+      "Read(//C/Users/Korn/Desktop/Korn/trace space/loyverseAPI/**)"
+    ],
+    "deny": [
+      "Read(//C/Users/Korn/Desktop/Korn/trace space/loyverseAPI/.env)",
+      "Read(//C/Users/Korn/Desktop/Korn/trace space/loyverseAPI/credentials.json)",
+      "Read(//C/Users/Korn/Desktop/Korn/trace space/loyverseAPI/token.json)"
+    ]
+  }
+}

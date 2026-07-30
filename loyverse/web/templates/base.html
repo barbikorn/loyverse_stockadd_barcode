@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Loyverse Sync{% endblock %}</title>
+  <style>
+    :root { --bg:#f9ae19; --card:#fffaf0; --accent:#5e2f10; --accent2:#9a5a23;
+            --text:#3a1f0a; --muted:#8a6d4f; --line:#ecd9b8; --brown:#5e2f10;
+            --field:#fffdf9; --on-accent:#fff7e8; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, "Segoe UI", sans-serif;
+           background: var(--bg); color: var(--text); }
+    header { background: var(--card); border-bottom:1px solid var(--line);
+             padding: 14px 24px; display:flex; align-items:center; gap:20px; }
+    header h1 { font-size:18px; margin:0; }
+    nav a { color: var(--muted); text-decoration:none; margin-right:16px; font-weight:600; }
+    nav a:hover, nav a.active { color: var(--accent); }
+    main { max-width: 960px; margin: 28px auto; padding: 0 20px; }
+    .card { background: var(--card); border:1px solid var(--line); border-radius:14px;
+            padding: 22px; margin-bottom: 22px; }
+    label { display:block; font-size:13px; color: var(--muted); margin-bottom:6px; }
+    input[type=text], input[type=url] { width:100%; padding:11px 13px; border-radius:9px;
+            border:1px solid var(--line); background:var(--field); color:var(--text); font-size:14px; }
+    .btn { border:none; border-radius:9px; padding:11px 18px; font-size:14px; font-weight:700;
+           cursor:pointer; color:var(--on-accent); }
+    .btn-1 { background: var(--accent); }
+    .btn-2 { background: var(--accent2); }
+    .btn-row { display:flex; gap:12px; margin-top:16px; flex-wrap:wrap; }
+    pre { background:var(--field); border:1px solid var(--line); border-radius:10px; padding:16px;
+          overflow:auto; white-space:pre-wrap; word-break:break-word; font-size:13px; line-height:1.5; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); }
+    th { color: var(--accent); position:sticky; top:0; background: var(--card); }
+    .muted { color: var(--muted); font-size:13px; }
+    .err { color:#b91c1c; }
+    .scroll { max-height:60vh; overflow:auto; border:1px solid var(--line); border-radius:10px; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+
+    /* Run panel */
+    .run-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .progress { height:14px; background:var(--field); border:1px solid var(--line);
+                border-radius:999px; overflow:hidden; }
+    .progress-bar { height:100%; width:0; background:var(--accent);
+                    transition:width .3s ease; border-radius:999px; }
+    .progress-bar.bar-ok   { background:#15803d; }
+    .progress-bar.bar-warn { background:#c2410c; }
+    .counts { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+
+    /* Badges */
+    .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 10px;
+             border-radius:999px; font-size:12px; font-weight:700; }
+    .badge b { font-weight:800; }
+    .badge-ok      { background:rgba(21,128,61,.12);   color:#15803d; }
+    .badge-warn    { background:rgba(194,65,12,.12);   color:#c2410c; }
+    .badge-err     { background:rgba(185,28,28,.12);   color:#b91c1c; }
+    .badge-running { background:rgba(94,47,16,.12);    color:#5e2f10; }
+
+    /* Result banner */
+    .result-banner { padding:14px 16px; border-radius:10px; font-weight:700; font-size:14px; }
+    .banner-ok   { background:rgba(21,128,61,.10);   color:#15803d; border:1px solid rgba(21,128,61,.35); }
+    .banner-warn { background:rgba(194,65,12,.10);   color:#c2410c; border:1px solid rgba(194,65,12,.35); }
+    .banner-err  { background:rgba(185,28,28,.10);   color:#b91c1c; border:1px solid rgba(185,28,28,.35); }
+    .banner-info { background:rgba(148,163,184,.12); color:var(--muted); border:1px solid var(--line); }
+
+    /* Spinner */
+    .spinner { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent;
+               border-radius:50%; display:inline-block; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🏷️ Loyverse Sync</h1>
+    <nav>
+      <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint=='index' }}">Input / Run</a>
+      <a href="{{ url_for('transactions') }}" class="{{ 'active' if request.endpoint=='transactions' }}">Transactions</a>
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>
