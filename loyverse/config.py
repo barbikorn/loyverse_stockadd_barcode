@@ -56,6 +56,12 @@ SHEET_COL_STATE        = os.getenv("SHEET_COL_STATE",        "Process_State")
 # ─── SKU format ────────────────────────────────────────────────
 SKU_DIGIT_PAD = int(os.getenv("SKU_DIGIT_PAD", "3"))   # e.g. 3 → MM001
 
+# ─── Reports (sales by category) ──────────────────────────────
+REPORT_TIMEZONE        = os.getenv("REPORT_TIMEZONE", "Asia/Bangkok")
+REPORT_MAX_RANGE_DAYS  = int(os.getenv("REPORT_MAX_RANGE_DAYS", "366"))
+REPORT_CATALOG_TTL_SEC = int(os.getenv("REPORT_CATALOG_TTL_SEC", "600"))
+REPORT_CURRENCY_SYMBOL = os.getenv("REPORT_CURRENCY_SYMBOL", "฿")
+
 # ─── Output paths ──────────────────────────────────────────────
 OUTPUT_DIR                = os.getenv("OUTPUT_DIR",                "output")
 BARCODE_OUTPUT_DIR_PREFIX = os.getenv("BARCODE_OUTPUT_DIR_PREFIX", "barcodes")

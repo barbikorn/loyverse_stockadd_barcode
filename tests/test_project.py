@@ -8,6 +8,7 @@ import os
 import tempfile
 import inspect
 import py_compile
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -68,6 +69,9 @@ py_files = [
     "loyverse/steps/step2_stock_update.py",
     "loyverse/steps/legacy_sync.py",
     "loyverse/web/app.py",
+    "loyverse/reports/catalog_cache.py",
+    "loyverse/reports/sales_by_category.py",
+    "loyverse/reports/excel_export.py",
 ]
 for f in py_files:
     def _check(f=f):
@@ -302,10 +306,34 @@ def _fn_exists():
         "get_all_categories", "find_category_id",
         "get_last_sku_in_category", "get_current_stock",
         "update_stock", "create_item",
+        "iter_all_items", "iter_receipts", "list_categories",
     ]
     for fn in required:
         assert hasattr(lv, fn), f"Missing function: {fn}"
 test("loyverse_api: all required functions exist", _fn_exists)
+
+
+def _iter_receipts_pagination():
+    """iter_receipts() ต้องไล่ทุกหน้าตาม cursor และหยุดเมื่อไม่มี cursor (ไม่วน infinite)"""
+    pages = [
+        {"receipts": [{"receipt_number": "1"}, {"receipt_number": "2"}], "cursor": "PAGE2"},
+        {"receipts": [{"receipt_number": "3"}]},
+    ]
+    calls = []
+
+    def mock_get(path, params=None):
+        calls.append(params)
+        return pages.pop(0)
+
+    with patch.object(lv, "_get", side_effect=mock_get), \
+         patch.object(lv, "_get_default_store_id", return_value="STORE1"):
+        result = list(lv.iter_receipts("2026-07-01T00:00:00.000Z", "2026-07-01T23:59:59.999Z"))
+
+    assert [r["receipt_number"] for r in result] == ["1", "2", "3"]
+    assert len(calls) == 2
+    assert "cursor" not in calls[0]
+    assert calls[1]["cursor"] == "PAGE2"
+test("loyverse_api: iter_receipts paginates via cursor and stops correctly", _iter_receipts_pagination)
 
 def _create_item_sig():
     sig = inspect.signature(lv.create_item)
@@ -352,6 +380,371 @@ def _create_item_no_store_id():
     assert "store_id" not in store_entry, f"store_id should be absent, got: {store_entry}"
     assert store_entry["stock_after"] == 5
 test("loyverse_api: create_item omits store_id when LOYVERSE_STORE_ID is empty", _create_item_no_store_id)
+
+
+# ─── 7. Reports: sales_by_category (pure aggregate logic) ─────
+print("\n=== [7] Reports: sales_by_category ===")
+
+_reset("loyverse.reports.catalog_cache", "loyverse.reports.sales_by_category", "loyverse.config")
+with patch.dict(os.environ, BASE_ENV):
+    from loyverse import config as _cfg3  # noqa: F401
+    from loyverse.reports.catalog_cache import Catalog, ItemInfo, NO_CATEGORY_NAME
+    from loyverse.reports import sales_by_category as sbc
+    from loyverse.reports.sales_by_category import DELETED_ITEM_CATEGORY_NAME
+
+
+def _make_catalog():
+    items = {
+        "item1": ItemInfo(item_id="item1", item_name="สินค้า A", category_id="catA", category_name="ร้านเอ"),
+        "item2": ItemInfo(item_id="item2", item_name="สินค้า B", category_id="catB", category_name="ร้านบี"),
+    }
+    return Catalog(items=items, categories=[("catA", "ร้านเอ"), ("catB", "ร้านบี")])
+
+
+def _sale_receipt(number, item_id, sku, qty, gross, discount, net, variant_id=None,
+                  receipt_type="SALE", cancelled_at=None, price=None):
+    return {
+        "receipt_number": number,
+        "receipt_type": receipt_type,
+        "cancelled_at": cancelled_at,
+        "line_items": [{
+            "item_id": item_id,
+            "variant_id": variant_id or f"{item_id}-v1",
+            "sku": sku,
+            "item_name": f"item-{item_id}",
+            "variant_name": None,
+            "quantity": qty,
+            "price": price if price is not None else (gross / qty if qty else 0),
+            "gross_total_money": gross,
+            "total_discount": discount,
+            "total_money": net,
+        }],
+    }
+
+
+def _two_categories_share_100():
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 2, 20, 2, 18),
+        _sale_receipt("1-002", "item2", "SKU2", 1, 15, 0, 15),
+    ]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    assert len(report.rows) == 2
+    by_name = {r.category_name: r for r in report.rows}
+    assert by_name["ร้านเอ"].net_sales == 18
+    assert by_name["ร้านบี"].net_sales == 15
+    total_share = sum(r.share_pct for r in report.rows)
+    assert abs(total_share - 100.0) < 1e-9, f"share_pct should sum to 100, got {total_share}"
+    assert report.totals.net_sales == 33
+test("aggregate: 2 SALE receipts / 2 categories -> correct totals, share_pct sums to 100", _two_categories_share_100)
+
+
+def _refund_is_subtracted():
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 2, 20, 2, 18),
+        _sale_receipt("1-002", "item1", "SKU1", 1, 10, 0, 9, receipt_type="REFUND"),
+    ]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    row = report.rows[0]
+    assert row.qty_sold == 1        # 2 - 1
+    assert row.net_sales == 9       # 18 - 9
+    assert report.refunds_scanned == 1
+    assert report.receipts_scanned == 2
+test("aggregate: REFUND receipt subtracts qty/net_sales, refunds_scanned counted", _refund_is_subtracted)
+
+
+def _cancelled_receipt_skipped():
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 2, 20, 2, 18),
+        _sale_receipt("1-002", "item1", "SKU1", 1, 10, 0, 10, cancelled_at="2026-07-01T10:00:00.000Z"),
+    ]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    assert report.cancelled_skipped == 1
+    assert report.receipts_scanned == 1
+    assert report.rows[0].net_sales == 18   # ใบที่ยกเลิกไม่ถูกนับ
+test("aggregate: cancelled receipt is skipped and counted in cancelled_skipped", _cancelled_receipt_skipped)
+
+
+def _deleted_item_bucket():
+    receipts = [_sale_receipt("1-001", "item_gone", "SKUX", 1, 10, 0, 10)]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    assert len(report.rows) == 1
+    assert report.rows[0].category_name == DELETED_ITEM_CATEGORY_NAME
+test("aggregate: item_id missing from catalog -> '(สินค้าถูกลบ)' bucket", _deleted_item_bucket)
+
+
+def _category_filter_subset():
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 2, 20, 2, 18),
+        _sale_receipt("1-002", "item2", "SKU2", 1, 15, 0, 15),
+    ]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+        category_ids=["catA"],
+    )
+    assert len(report.rows) == 1
+    assert report.rows[0].category_name == "ร้านเอ"
+    assert report.rows[0].share_pct == 100.0
+    assert report.totals.net_sales == 18
+test("aggregate: category_ids filter narrows rows and recomputes share_pct on subset", _category_filter_subset)
+
+
+def _fractional_qty_sold_by_weight():
+    receipts = [_sale_receipt("1-001", "item1", "SKU1", 1.5, 15, 0, 15)]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    assert report.rows[0].qty_sold == 1.5
+test("aggregate: sold_by_weight fractional quantity (1.5) preserved as float", _fractional_qty_sold_by_weight)
+
+
+def _item_level_fields():
+    """ItemRow ต้องมี gross/discount/ราคาต่อหน่วย ครบสำหรับทำ statement แบบ invoice"""
+    receipts = [_sale_receipt("1-001", "item1", "SKU1", 4, 40, 4, 36)]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    item = report.rows[0].items[0]
+    assert item.qty_sold == 4
+    assert item.gross_sales == 40
+    assert item.discounts == 4
+    assert item.net_sales == 36
+    assert item.unit_price == 10.0, item.unit_price   # 40 / 4
+test("aggregate: ItemRow carries gross/discount/unit_price for invoice layout", _item_level_fields)
+
+
+def _unit_price_weighted_average():
+    """ขายสินค้าเดียวกันสองราคา → ราคา/หน่วย เป็นค่าเฉลี่ยถ่วงน้ำหนัก ไม่ใช่ราคาล่าสุด"""
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 1, 10, 0, 10, price=10),
+        _sale_receipt("1-002", "item1", "SKU1", 3, 60, 0, 60, price=20),
+    ]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    item = report.rows[0].items[0]
+    assert item.qty_sold == 4
+    assert item.unit_price == 17.5, item.unit_price   # (10 + 60) / 4
+test("aggregate: unit_price is weighted average across differing prices", _unit_price_weighted_average)
+
+
+def _unit_price_fallback_when_qty_zero():
+    """ขายแล้วคืนหมด (qty สุทธิ = 0) ต้องไม่หารด้วยศูนย์ — ใช้ราคาตั้งเป็น fallback"""
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 2, 20, 0, 20, price=10),
+        _sale_receipt("1-002", "item1", "SKU1", 2, 20, 0, 20, price=10, receipt_type="REFUND"),
+    ]
+    report = sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 1), tz_name="Asia/Bangkok",
+    )
+    item = report.rows[0].items[0]
+    assert item.qty_sold == 0
+    assert item.unit_price == 10.0, item.unit_price
+test("aggregate: unit_price falls back to list price when net qty is 0 (no ZeroDivision)", _unit_price_fallback_when_qty_zero)
+
+
+def _utc_range_bangkok():
+    lo, hi = sbc.utc_range(date(2026, 7, 1), date(2026, 7, 1), "Asia/Bangkok")
+    assert lo == "2026-06-30T17:00:00.000Z", lo
+    assert hi == "2026-07-01T16:59:59.999Z", hi
+test("utc_range: Asia/Bangkok single day -> correct UTC boundaries", _utc_range_bangkok)
+
+
+def _catalog_cache_ttl_and_refresh():
+    from loyverse.reports import catalog_cache as cc
+    cc.clear_cache()
+    fake_catalog = _make_catalog()
+    with patch.object(cc, "_fetch_catalog", return_value=fake_catalog) as mock_fetch:
+        c1 = cc.get_catalog()
+        c2 = cc.get_catalog()  # ต้องมาจาก cache ไม่ยิงซ้ำ
+        assert mock_fetch.call_count == 1
+        c3 = cc.get_catalog(force_refresh=True)  # บังคับ refresh ต้องยิงใหม่
+        assert mock_fetch.call_count == 2
+    cc.clear_cache()
+test("catalog_cache: caches within TTL, force_refresh bypasses cache", _catalog_cache_ttl_and_refresh)
+
+
+# ─── 8. Reports: excel_export ──────────────────────────────────
+print("\n=== [8] Reports: excel_export ===")
+
+from loyverse.reports import excel_export
+
+
+def _sample_report():
+    receipts = [
+        _sale_receipt("1-001", "item1", "SKU1", 2, 20, 2, 18),
+        _sale_receipt("1-002", "item2", "SKU2", 1, 15, 0, 15),
+    ]
+    return sbc.aggregate(
+        receipts, _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 30), tz_name="Asia/Bangkok",
+    )
+
+
+def _excel_overview_plus_statement_per_owner():
+    """1 ชีตสรุปรวม + 1 ชีต statement ต่อผู้ฝากขาย 1 ราย"""
+    import openpyxl
+    report = _sample_report()
+    bio = excel_export.build_workbook(report)
+    wb = openpyxl.load_workbook(bio)
+    assert wb.sheetnames == ["สรุปรวมทุกราย", "ร้านเอ", "ร้านบี"], wb.sheetnames
+
+    ws = wb["สรุปรวมทุกราย"]
+    header_row = None
+    for row in ws.iter_rows(min_row=1, max_row=12):
+        if [c.value for c in row][:1] == [excel_export.SUMMARY_HEADERS[0]]:
+            header_row = row[0].row
+            break
+    assert header_row, "ไม่พบแถว header ในชีตสรุปรวม"
+    assert [c.value for c in ws[header_row]] == excel_export.SUMMARY_HEADERS
+test("excel_export: overview sheet + one statement sheet per consignor", _excel_overview_plus_statement_per_owner)
+
+
+def _excel_statement_line_items():
+    """ชีต statement ต้องมีหัวตารางแบบ invoice และรายการสินค้าพร้อมราคา/หน่วย"""
+    import openpyxl
+    report = _sample_report()
+    bio = excel_export.build_workbook(report)
+    ws = openpyxl.load_workbook(bio)["ร้านเอ"]
+
+    header_row = None
+    for row in ws.iter_rows(min_row=1, max_row=20):
+        if [c.value for c in row][:1] == [excel_export.STATEMENT_HEADERS[0]]:
+            header_row = row[0].row
+            break
+    assert header_row, "ไม่พบแถว header ในชีต statement"
+    assert [c.value for c in ws[header_row]][:9] == excel_export.STATEMENT_HEADERS
+
+    # แถวสินค้าแรก: SKU1, qty 2, ราคา/หน่วย 10 (gross 20 / qty 2), net 18
+    item = ws[header_row + 1]
+    assert item[1].value == "SKU1", item[1].value
+    assert item[4].value == 2
+    assert item[5].value == 10.0, item[5].value
+    assert item[8].value == 18
+
+    # ต้องมีบล็อกสรุปที่ระบุยอดต้องจ่าย
+    text = "\n".join(
+        str(c.value) for row in ws.iter_rows() for c in row if c.value is not None
+    )
+    assert "ยอดสุทธิที่ต้องจ่าย" in text
+    assert "ผู้รับเงิน" in text
+test("excel_export: statement sheet has invoice line items + payout block", _excel_statement_line_items)
+
+
+def _excel_safe_sheet_name():
+    used = set()
+    assert excel_export._safe_sheet_name("ร้าน/เอ:ทดสอบ", used) == "ร้าน-เอ-ทดสอบ"
+    long_name = "ก" * 40
+    assert len(excel_export._safe_sheet_name(long_name, used)) <= 31
+    used2 = set()
+    a = excel_export._safe_sheet_name("ซ้ำ", used2)
+    b = excel_export._safe_sheet_name("ซ้ำ", used2)
+    assert a != b, "ชื่อชีตซ้ำต้องถูกทำให้ไม่ซ้ำ"
+test("excel_export: _safe_sheet_name strips illegal chars, truncates, dedupes", _excel_safe_sheet_name)
+
+
+def _excel_filename():
+    report = _sample_report()
+    fname = excel_export.suggested_filename(report)
+    assert fname == "สรุปยอดฝากขาย_ทุกราย_20260701-20260730.xlsx", fname
+
+    # ผู้ฝากขายรายเดียว → ใส่ชื่อรายนั้นในชื่อไฟล์ ส่งต่อได้เลย
+    single = sbc.aggregate(
+        [_sale_receipt("1-001", "item1", "SKU1", 2, 20, 2, 18)], _make_catalog(),
+        date_from=date(2026, 7, 1), date_to=date(2026, 7, 30), tz_name="Asia/Bangkok",
+    )
+    assert excel_export.suggested_filename(single) == "สรุปยอดฝากขาย_ร้านเอ_20260701-20260730.xlsx"
+test("excel_export: suggested_filename names the consignor when report has one", _excel_filename)
+
+
+# ─── 9. Web: /reports/sales routes ─────────────────────────────
+print("\n=== [9] Web: /reports/sales routes ===")
+
+_reset("loyverse.web.app", "loyverse.config", "loyverse.sheets.auth")
+sys.modules["loyverse.sheets.auth"] = MagicMock()
+with patch.dict(os.environ, BASE_ENV):
+    from loyverse import config as _cfg4  # noqa: F401
+    from loyverse.web import app as web_app
+
+
+def _fake_catalog_for_web():
+    from loyverse.reports.catalog_cache import Catalog
+    return Catalog(items={}, categories=[("catA", "ร้านเอ"), ("catB", "ร้านบี")])
+
+
+def _fake_build_report(date_from, date_to, category_ids=None, progress=None):
+    from datetime import datetime, timezone
+    row = sbc.CategoryRow(category_id="catA", category_name="ร้านเอ", qty_sold=2, gross_sales=20,
+                          discounts=2, net_sales=18, share_pct=100.0, receipts_count=1, items=[])
+    totals = sbc.CategoryRow(category_id=None, category_name="รวมทั้งหมด", qty_sold=2, gross_sales=20,
+                             discounts=2, net_sales=18, share_pct=100.0, receipts_count=1)
+    return sbc.SalesReport(
+        date_from=date_from, date_to=date_to, tz_name="Asia/Bangkok",
+        category_filter=category_ids or [],
+        rows=[row], totals=totals,
+        receipts_scanned=1, refunds_scanned=0, cancelled_skipped=0,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _sales_report_default_page():
+    with patch.object(web_app.catalog_cache, "get_catalog", return_value=_fake_catalog_for_web()), \
+         patch.object(web_app.sbc, "build_report", side_effect=_fake_build_report):
+        client = web_app.app.test_client()
+        res = client.get("/reports/sales")
+    assert res.status_code == 200
+    assert "ร้านเอ".encode() in res.data
+test("web: GET /reports/sales (no params) -> 200 with default range + category", _sales_report_default_page)
+
+
+def _sales_report_bad_range():
+    with patch.object(web_app.catalog_cache, "get_catalog", return_value=_fake_catalog_for_web()):
+        client = web_app.app.test_client()
+        res = client.get("/reports/sales?from=2026-07-30&to=2026-07-01")
+    assert res.status_code == 200
+    assert "ช่วงวันที่ไม่ถูกต้อง".encode() in res.data
+test("web: GET /reports/sales with to < from -> 200 with Thai error message (not 500)", _sales_report_bad_range)
+
+
+def _sales_report_export():
+    with patch.object(web_app.sbc, "build_report", side_effect=_fake_build_report):
+        client = web_app.app.test_client()
+        res = client.get("/reports/sales/export?from=2026-07-01&to=2026-07-30")
+    assert res.status_code == 200
+    assert res.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment" in res.headers.get("Content-Disposition", "")
+test("web: GET /reports/sales/export -> 200 xlsx attachment", _sales_report_export)
+
+
+def _parse_report_args_edge_cases():
+    from werkzeug.datastructures import MultiDict
+
+    _, _, _, err = web_app._parse_report_args(MultiDict({"from": "not-a-date"}))
+    assert err, "invalid date should produce an error message"
+
+    _, _, cats, _ = web_app._parse_report_args(MultiDict([("category", "a"), ("category", "b")]))
+    assert cats == ["a", "b"]
+
+    today_str = date.today().isoformat()
+    _, _, _, err2 = web_app._parse_report_args(MultiDict({"from": "2000-01-01", "to": today_str}))
+    assert "กว้างเกินไป" in err2
+test("web: _parse_report_args handles bad date / repeated category / too-wide range", _parse_report_args_edge_cases)
 
 
 # ─── Summary ──────────────────────────────────────────────────

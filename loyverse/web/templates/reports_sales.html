@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block title %}Sales by Category · Loyverse Sync{% endblock %}
+{% block content %}
+
+<div class="card">
+  <form method="get" action="{{ url_for('sales_report') }}" id="report-form">
+    <div style="display:flex; gap:16px; flex-wrap:wrap;">
+      <div style="flex:1; min-width:160px;">
+        <label for="from">ช่วงวันที่ (จาก)</label>
+        <input type="date" id="from" name="from" value="{{ date_from.isoformat() }}">
+      </div>
+      <div style="flex:1; min-width:160px;">
+        <label for="to">ถึง</label>
+        <input type="date" id="to" name="to" value="{{ date_to.isoformat() }}">
+      </div>
+    </div>
+
+    <div class="chips">
+      <button type="button" class="chip" data-preset="today">วันนี้</button>
+      <button type="button" class="chip" data-preset="yesterday">เมื่อวาน</button>
+      <button type="button" class="chip" data-preset="7d">7 วันล่าสุด</button>
+      <button type="button" class="chip" data-preset="month">เดือนนี้</button>
+      <button type="button" class="chip" data-preset="last-month">เดือนก่อน</button>
+    </div>
+
+    <label>Category (เจ้าของสินค้าฝากขาย)</label>
+    <div class="cat-dropdown" id="cat-dropdown">
+      <button type="button" class="cat-dropdown-toggle" id="cat-toggle" aria-haspopup="listbox" aria-expanded="false">
+        <span id="cat-toggle-label">ทุก Category</span>
+        <span class="cat-caret">▾</span>
+      </button>
+      <div class="cat-dropdown-panel" id="cat-panel" role="listbox">
+        <input type="text" class="cat-search" id="cat-search" placeholder="ค้นหา category...">
+        <div class="cat-grid" id="cat-grid">
+          {% for cid, name in categories %}
+          <label>
+            <input type="checkbox" name="category" value="{{ cid }}" {{ 'checked' if cid in category_ids else '' }}>
+            {{ name }}
+          </label>
+          {% endfor %}
+        </div>
+        <div class="cat-panel-footer">
+          <button type="button" class="chip" id="cat-clear">ล้างที่เลือก</button>
+          <button type="button" class="btn btn-1" id="cat-done">เสร็จสิ้น</button>
+        </div>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:6px;">ไม่เลือกเลย = แสดงทุก Category</p>
+
+    <div class="btn-row">
+      <button class="btn btn-1" type="submit">📊 ดูรายงาน</button>
+      <button class="btn btn-2" type="submit" formaction="{{ url_for('sales_report_export') }}">⬇️ Export Excel</button>
+    </div>
+    <p class="muted" style="margin-top:10px;">
+      ไฟล์ Excel จะมีชีตสรุปรวม 1 ชีต และชีต “ใบสรุปยอดขายฝากขาย” แยกอีก 1 ชีตต่อผู้ฝากขาย 1 ราย
+      (พร้อมส่งต่อให้เจ้าของได้เลย) — ถ้าเลือกผู้ฝากขายรายเดียว ชื่อไฟล์จะมีชื่อรายนั้นให้ด้วย
+    </p>
+  </form>
+
+  <form method="post" action="{{ url_for('sales_report_refresh_catalog') }}" style="margin-top:12px;">
+    <input type="hidden" name="from" value="{{ date_from.isoformat() }}">
+    <input type="hidden" name="to" value="{{ date_to.isoformat() }}">
+    {% for cid in category_ids %}<input type="hidden" name="category" value="{{ cid }}">{% endfor %}
+    <button class="btn" type="submit">↻ รีเฟรชแคตตาล็อก</button>
+  </form>
+</div>
+
+{% if error %}
+<div class="card"><p class="err">{{ error }}</p></div>
+{% elif report %}
+  {% if not report.rows %}
+  <div class="card"><p class="muted">ไม่พบยอดขายในช่วงวันที่ที่เลือก</p></div>
+  {% else %}
+  <div class="tiles">
+    <div class="tile">
+      <div class="label">ยอดต้องจ่ายรวม (สุทธิ)</div>
+      <div class="value">{{ currency }}{{ '{:,.2f}'.format(report.totals.net_sales) }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">จำนวนที่ขายรวม</div>
+      <div class="value">{{ '{:,.2f}'.format(report.totals.qty_sold) }}</div>
+    </div>
+    <div class="tile">
+      <div class="label">จำนวนบิล</div>
+      <div class="value">{{ report.totals.receipts_count }}</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="scroll">
+      <table class="report" id="report-table">
+        <thead>
+          <tr>
+            <th data-sort="text">Category</th>
+            <th data-sort="num" class="num">จำนวนที่ขาย</th>
+            <th data-sort="num" class="num">Gross</th>
+            <th data-sort="num" class="num">ส่วนลด</th>
+            <th data-sort="num" class="num">ยอดต้องจ่าย</th>
+            <th data-sort="num" class="num">สัดส่วน</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in report.rows %}
+          <tr>
+            <td data-value="{{ row.category_name }}">
+              {% if row.items %}
+              <details class="cat-detail">
+                <summary>{{ row.category_name }}</summary>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>SKU</th><th>ชื่อสินค้า</th><th>ตัวเลือก</th>
+                      <th class="num">จำนวน</th><th class="num">ราคา/หน่วย</th>
+                      <th class="num">ยอดขายรวม</th><th class="num">ส่วนลด</th><th class="num">สุทธิ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                  {% for item in row.items %}
+                    <tr>
+                      <td>{{ item.sku }}</td>
+                      <td>{{ item.item_name }}</td>
+                      <td>{{ item.variant_name }}</td>
+                      <td class="num">{{ '{:,.2f}'.format(item.qty_sold) }}</td>
+                      <td class="num">{{ '{:,.2f}'.format(item.unit_price) }}</td>
+                      <td class="num">{{ '{:,.2f}'.format(item.gross_sales) }}</td>
+                      <td class="num">{{ '{:,.2f}'.format(item.discounts) }}</td>
+                      <td class="num{{ ' neg' if item.net_sales < 0 else '' }}">{{ '{:,.2f}'.format(item.net_sales) }}</td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </details>
+              {% else %}
+                {{ row.category_name }}
+              {% endif %}
+            </td>
+            <td class="num" data-value="{{ row.qty_sold }}">{{ '{:,.2f}'.format(row.qty_sold) }}</td>
+            <td class="num" data-value="{{ row.gross_sales }}">{{ '{:,.2f}'.format(row.gross_sales) }}</td>
+            <td class="num" data-value="{{ row.discounts }}">{{ '{:,.2f}'.format(row.discounts) }}</td>
+            <td class="num{{ ' neg' if row.net_sales < 0 else '' }}" data-value="{{ row.net_sales }}">{{ '{:,.2f}'.format(row.net_sales) }}</td>
+            <td class="num bar-cell" data-value="{{ row.share_pct }}">
+              <span class="bar" style="width:{{ [[row.share_pct, 0]|max, 100]|min }}%;"></span>
+              <span>{{ '{:.2f}'.format(row.share_pct) }}%</span>
+            </td>
+          </tr>
+          {% endfor %}
+          <tr class="totals-row">
+            <td>{{ report.totals.category_name }}</td>
+            <td class="num">{{ '{:,.2f}'.format(report.totals.qty_sold) }}</td>
+            <td class="num">{{ '{:,.2f}'.format(report.totals.gross_sales) }}</td>
+            <td class="num">{{ '{:,.2f}'.format(report.totals.discounts) }}</td>
+            <td class="num{{ ' neg' if report.totals.net_sales < 0 else '' }}">{{ '{:,.2f}'.format(report.totals.net_sales) }}</td>
+            <td class="num">{{ '{:.2f}'.format(report.totals.share_pct) }}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="margin-top:14px;">
+      หมายเหตุ: refund ถูกหักออกจากยอดแล้ว · บิลที่ยกเลิก {{ report.cancelled_skipped }} ใบไม่ถูกนับ ·
+      ข้อมูล ณ {{ report.generated_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+    </p>
+  </div>
+  {% endif %}
+{% endif %}
+
+<script>
+(function () {
+  function fmtDate(d) { return d.toISOString().slice(0, 10); }
+
+  document.querySelectorAll('.chip').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var now = new Date();
+      var preset = btn.dataset.preset;
+      var from, to;
+      if (preset === 'today') { from = to = fmtDate(now); }
+      else if (preset === 'yesterday') {
+        var y = new Date(now); y.setDate(y.getDate() - 1); from = to = fmtDate(y);
+      } else if (preset === '7d') {
+        var s = new Date(now); s.setDate(s.getDate() - 6); from = fmtDate(s); to = fmtDate(now);
+      } else if (preset === 'month') {
+        from = fmtDate(new Date(now.getFullYear(), now.getMonth(), 1)); to = fmtDate(now);
+      } else if (preset === 'last-month') {
+        var s2 = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        var e2 = new Date(now.getFullYear(), now.getMonth(), 0);
+        from = fmtDate(s2); to = fmtDate(e2);
+      }
+      document.getElementById('from').value = from;
+      document.getElementById('to').value = to;
+    });
+  });
+
+  var search = document.getElementById('cat-search');
+  if (search) {
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      document.querySelectorAll('#cat-grid label').forEach(function (label) {
+        var text = label.textContent.trim().toLowerCase();
+        label.classList.toggle('hidden', !!q && text.indexOf(q) === -1);
+      });
+    });
+  }
+
+  var dropdown = document.getElementById('cat-dropdown');
+  var toggle = document.getElementById('cat-toggle');
+  var panel = document.getElementById('cat-panel');
+  var toggleLabel = document.getElementById('cat-toggle-label');
+  var checkboxes = document.querySelectorAll('#cat-grid input[type=checkbox]');
+
+  function updateToggleLabel() {
+    var checked = Array.prototype.filter.call(checkboxes, function (c) { return c.checked; });
+    if (checked.length === 0) toggleLabel.textContent = 'ทุก Category';
+    else if (checked.length === 1) toggleLabel.textContent = checked[0].parentElement.textContent.trim();
+    else toggleLabel.textContent = checked.length + ' Category ที่เลือก';
+  }
+
+  function openPanel() {
+    dropdown.classList.add('open');
+    toggle.setAttribute('aria-expanded', 'true');
+    if (search) search.focus();
+  }
+  function closePanel() {
+    dropdown.classList.remove('open');
+    toggle.setAttribute('aria-expanded', 'false');
+  }
+
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      dropdown.classList.contains('open') ? closePanel() : openPanel();
+    });
+  }
+  checkboxes.forEach(function (c) { c.addEventListener('change', updateToggleLabel); });
+
+  var clearBtn = document.getElementById('cat-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      checkboxes.forEach(function (c) { c.checked = false; });
+      updateToggleLabel();
+    });
+  }
+  var doneBtn = document.getElementById('cat-done');
+  if (doneBtn) doneBtn.addEventListener('click', closePanel);
+
+  document.addEventListener('click', function (e) {
+    if (dropdown && !dropdown.contains(e.target)) closePanel();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closePanel();
+  });
+
+  updateToggleLabel();
+
+  var table = document.getElementById('report-table');
+  if (table) {
+    var tbody = table.tBodies[0];
+    table.querySelectorAll('th[data-sort]').forEach(function (th, idx) {
+      th.addEventListener('click', function () {
+        var type = th.dataset.sort;
+        var asc = th.dataset.dir !== 'asc';
+        table.querySelectorAll('th[data-sort]').forEach(function (h) { delete h.dataset.dir; });
+        th.dataset.dir = asc ? 'asc' : 'desc';
+
+        var totals = tbody.querySelector('tr.totals-row');
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr:not(.totals-row)'));
+        rows.sort(function (a, b) {
+          var cellA = a.children[idx], cellB = b.children[idx];
+          if (type === 'num') {
+            var va = parseFloat(cellA.dataset.value || '0');
+            var vb = parseFloat(cellB.dataset.value || '0');
+            return asc ? va - vb : vb - va;
+          }
+          var ta = (cellA.dataset.value || cellA.textContent).trim().toLowerCase();
+          var tb = (cellB.dataset.value || cellB.textContent).trim().toLowerCase();
+          return asc ? ta.localeCompare(tb) : tb.localeCompare(ta);
+        });
+        rows.forEach(function (r) { tbody.insertBefore(r, totals); });
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}

@@ -33,6 +33,10 @@ python -m loyverse.steps.step2_stock_update   # add real stock once goods arrive
 
 python -m loyverse.diagnostics                # verify Google service-account access
 python tests/test_project.py                  # run the test suite (no real creds needed)
+
+# Sales-by-category report (also available at /reports/sales in the Web UI)
+python -m loyverse.reports.sales_by_category --from 2026-07-01 --to 2026-07-30 \
+       [--category "ร้านเอ" --category "ร้านบี"] [--excel out.xlsx]
 ```
 
 Barcodes land in `output/{YYYYMMDD}/{sheet-file-name}/{SKU}.png`.
@@ -58,7 +62,10 @@ Run things as modules from the repo root (`python -m loyverse...`), not as loose
 | `loyverse/shared_logic.py` | Per-row business logic shared by both steps (`process_row_step1/2`). |
 | `loyverse/steps/step1_barcode_gen.py` / `step2_stock_update.py` | The two pipeline entry points. `run(url=None, progress=None)` returns a summary dict and, if given a `progress` callback, emits `{start,item,summary}` events the web UI streams live. |
 | `loyverse/steps/legacy_sync.py` | **Legacy** single-pass pipeline. Prefer the two-step modules. |
-| `loyverse/web/app.py` | Flask UI: `/` (input form), `/run` (SSE — streams live progress while a step runs), `/transactions` (view log). Served by gunicorn as `loyverse.web.app:app`. |
+| `loyverse/reports/catalog_cache.py` | In-memory cache (TTL, clearable) of `item_id → category` built from `/items` + `/categories`. Deleted/uncategorized items fall into `(สินค้าถูกลบ)` / `(ไม่มีหมวดหมู่)` buckets so sales are never silently dropped. |
+| `loyverse/reports/sales_by_category.py` | Sales-by-category report. `aggregate()` is pure (receipts + Catalog → `SalesReport`, no I/O — this is what the tests exercise). `build_report()` does the I/O: local date range → UTC (`utc_range()`, timezone-aware) → `loyverse_api.iter_receipts()` → `aggregate()`. Also a CLI entry point (`python -m loyverse.reports.sales_by_category`). |
+| `loyverse/reports/excel_export.py` | Renders a `SalesReport` to `.xlsx` (`build_workbook()` → `io.BytesIO`): one `สรุปรวมทุกราย` overview sheet, then **one consignment-statement sheet per consignor** (invoice-style: line items with qty/unit price/line total, then a right-aligned payout block and signature lines), print-ready and safe to forward to that one consignor. Totals are live `=SUM(...)` formulas, not baked-in values. |
+| `loyverse/web/app.py` | Flask UI: `/` (input form), `/run` (SSE — streams live progress while a step runs), `/transactions` (view log), `/reports/sales` + `/reports/sales/export` + `/reports/sales/refresh-catalog` (sales-by-category report + Excel export). Served by gunicorn as `loyverse.web.app:app`. |
 | `loyverse/diagnostics.py` | Diagnostic for Google Sheets permissions (was `check_auth.py`). |
 | `tools/dump_items.py` | Standalone scratch script that dumps all items/SKUs. Has a **hardcoded placeholder token** — not part of the real pipeline; don't wire it in. |
 | `tests/test_project.py` | Test suite. Run with `python tests/test_project.py` from the repo root. |
@@ -85,6 +92,19 @@ Data flow: `steps.*` → `sheets.reader.fetch_input_records()` → `shared_logic
 - Heavy use of emoji in console output (`🚀 ✅ ⚠️ ❌ 📦`). Keep the style consistent.
 - gspread clients and store IDs are cached via `lru_cache` — be aware when reasoning
   about test isolation (`test_project.py` pops modules from `sys.modules` to reset).
+- **Sales-by-category report (`loyverse/reports/`)**: "Category" here means the
+  consignment owner the sale is paid out to, not a product-type grouping — the report
+  deliberately has no cost/profit/margin columns (an owner shouldn't see other owners'
+  cost data) and no VAT handling (the shop doesn't charge VAT yet). Only one store
+  exists, so there's no store filter. If either of these changes, extend
+  `sales_by_category.CategoryRow` / `excel_export` rather than repurposing existing fields.
+  The Excel file is an **outward-facing document** handed to each consignor, so each
+  statement sheet must stay self-contained: never add cross-consignor figures to a
+  statement sheet. `ItemRow.unit_price` is a weighted average (`gross / qty`), falling
+  back to the line's list `price` when net qty is 0 — don't "simplify" it to a last-seen
+  price. The statement's payout block asserts `net = gross - discounts`; if a residual
+  ever appears (e.g. VAT arrives) `_residual()` surfaces it as its own line rather than
+  letting the arithmetic look wrong.
 
 ## Secrets — never touch or commit
 

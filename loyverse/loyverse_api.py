@@ -117,6 +117,28 @@ def find_category_id(cat_name: str) -> str | None:
     return cat_map.get(cat_name.strip().lower())
 
 
+def list_categories() -> list[dict]:
+    """
+    คืน [{'id':..., 'name':...}] ทั้งหมด (รวม pagination, ตัด deleted)
+    ต่างจาก get_all_categories() ตรงที่คืนทิศทาง id→name (รองรับชื่อซ้ำกันได้)
+    ใช้สำหรับหน้ารายงานที่ต้อง list ตัวเลือก category ให้ผู้ใช้เลือก
+    """
+    categories: list[dict] = []
+    cursor = None
+    while True:
+        params = {"limit": 250}
+        if cursor:
+            params["cursor"] = cursor
+        data = _get("/categories", params)
+        for cat in data.get("categories", []):
+            if not cat.get("deleted_at"):
+                categories.append({"id": cat["id"], "name": cat["name"]})
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+    return categories
+
+
 # ─── Variant / Item lookup ────────────────────────────────────
 
 def find_variant_by_sku(sku: str) -> tuple[str, str, float, str] | None:
@@ -252,6 +274,47 @@ def get_last_sku_in_category(category_id: str, prefix: str) -> str | None:
     return last_sku
 
 
+def iter_all_items():
+    """Generator ไล่ items ทุกหน้า (limit 250 + cursor) ตัดสินค้าที่ลบแล้วออก"""
+    cursor = None
+    while True:
+        params = {"limit": 250}
+        if cursor:
+            params["cursor"] = cursor
+        data = _get("/items", params)
+        for item in data.get("items", []):
+            if not item.get("deleted_at"):
+                yield item
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+
+
+# ─── Receipts ─────────────────────────────────────────────────
+
+def iter_receipts(created_at_min: str, created_at_max: str):
+    """
+    Generator ไล่ receipts ทุกหน้าในช่วงเวลา (ISO 8601 UTC) ที่ store default
+    yield receipt dict ทีละใบ — ใช้ generator เพื่อไม่กินแรมตอนช่วงวันยาว
+    """
+    store_id = _get_default_store_id()
+    cursor = None
+    while True:
+        params = {
+            "limit": 250,
+            "created_at_min": created_at_min,
+            "created_at_max": created_at_max,
+            "store_id": store_id,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        data = _get("/receipts", params)
+        yield from data.get("receipts", [])
+        cursor = data.get("cursor")
+        if not cursor:
+            break
+
+
 # ─── Inventory ────────────────────────────────────────────────
 
 def get_current_stock(variant_id: str) -> float:
@@ -348,6 +411,13 @@ def create_category(name: str) -> str:
     return res.json()["id"]
 
 
+def build_item_display_name(category_name: str, product_name: str) -> str:
+    """ชื่อสินค้าที่จะเก็บใน Loyverse — ให้ตรงกับ label บน barcode คือ '(category) name'"""
+    if category_name:
+        return f"({category_name}) {product_name}".strip()
+    return product_name or ""
+
+
 def ensure_item_exists(
     product_name: str,
     sku: str | None,
@@ -357,6 +427,7 @@ def ensure_item_exists(
     """
     ตรวจสอบว่าสินค้ามีอยู่แล้วหรือไม่ (ค้นหาจาก SKU หรือ ชื่อ+Category)
     ถ้าไม่มีจะสร้างใหม่โดยใช้ Auto SKU และสต็อกเริ่มต้นเป็น 0
+    ชื่อสินค้าที่เก็บใน Loyverse จะมี '(category)' นำหน้า เหมือนกับ label บน barcode
     คืน (variant_id, sku, price, variant_name)
     """
     from loyverse import sku_generator
@@ -366,6 +437,8 @@ def ensure_item_exists(
     if not cat_id:
         raise CategoryNotFoundError(category_name)
 
+    display_name = build_item_display_name(category_name, product_name)
+
     # 2. ค้นหาด้วย SKU (ถ้ามี)
     if sku:
         found = find_variant_by_sku(sku)
@@ -374,7 +447,7 @@ def ensure_item_exists(
             return found
 
     # 3. ค้นหาด้วยชื่อ + category
-    found = find_variant_by_name(product_name, category_id=cat_id)
+    found = find_variant_by_name(display_name, category_id=cat_id)
     if found:
         assert_price_matches(price, found[2])
         return found
@@ -384,12 +457,12 @@ def ensure_item_exists(
     prefix = sku_generator.get_prefix_for_category(category_name)
     if not prefix:
         raise ValueError(f"ไม่พบ prefix สำหรับ category '{category_name}' ใน Mapping Sheet")
-    
+
     last_sku = get_last_sku_in_category(cat_id, prefix)
     auto_sku = sku_generator.get_next_sku(prefix, last_sku)
-    
-    print(f"🆕 กำลังสร้างสินค้าใหม่: {product_name} (SKU: {auto_sku})")
-    create_item(product_name, auto_sku, initial_qty=0, category_id=cat_id, price=price)
+
+    print(f"🆕 กำลังสร้างสินค้าใหม่: {display_name} (SKU: {auto_sku})")
+    create_item(display_name, auto_sku, initial_qty=0, category_id=cat_id, price=price)
     
     # ค้นหาอีกรอบเพื่อเอา variant_id
     found = find_variant_by_sku(auto_sku)

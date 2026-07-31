@@ -41,6 +41,27 @@
 ### หน้า 2 — Transactions (`/transactions`)
 - วาง **URL ของ Transaction Google Sheet** เพื่อดู transaction log แบบตาราง (รายการใหม่สุดอยู่บน)
 
+### หน้า 3 — Sales by Category (`/reports/sales`)
+สรุปยอดขายแยกตาม **Category** (= เจ้าของสินค้าที่นำมาฝากขาย) สำหรับใช้จ่ายเงินคืนเจ้าของแต่ละราย
+- เลือกช่วงวันที่ (มี preset: วันนี้ / เมื่อวาน / 7 วันล่าสุด / เดือนนี้ / เดือนก่อน) และเลือก Category ที่ต้องการดู
+  (ไม่เลือกเลย = แสดงทุก Category)
+- ตารางแสดง จำนวนที่ขาย, ยอดขายรวม (Gross), ส่วนลด, **ยอดต้องจ่าย** (สุทธิ), สัดส่วน % — คลิกชื่อ category
+  เพื่อดู breakdown ระดับสินค้า (SKU, จำนวน, ราคา/หน่วย, ยอดขายรวม, ส่วนลด, สุทธิ), คลิก header เพื่อ sort
+- กด **⬇️ Export Excel** เพื่อดาวน์โหลดไฟล์ `.xlsx` (ชุดข้อมูลเดียวกับที่เห็นบนหน้าเว็บ) โครงสร้างไฟล์:
+  - ชีต **`สรุปรวมทุกราย`** — ภาพรวมทุกผู้ฝากขาย (ใช้ภายใน)
+  - ชีต **1 ชีตต่อผู้ฝากขาย 1 ราย** — จัดหน้าแบบ *ใบสรุปยอดขายฝากขาย (Consignment Sales Statement)*:
+    หัวเอกสาร (ชื่อผู้ฝากขาย / ช่วงวันที่ / วันที่ออก / เลขที่เอกสาร) → ตารางรายการสินค้า
+    (ลำดับ, SKU, ชื่อสินค้า, ตัวเลือก, จำนวน, ราคา/หน่วย, ยอดขายรวม, ส่วนลด, ยอดสุทธิ) →
+    บล็อกสรุปยอดชิดขวา (Gross → หักส่วนลด → **ยอดสุทธิที่ต้องจ่าย**) → หมายเหตุ → ช่องลงนามผู้จ่าย/ผู้รับเงิน
+  - แต่ละชีตตั้ง print area + fit-to-width 1 หน้า และซ้ำหัวตารางทุกหน้าเวลาปริ้นต์ → **ส่งต่อให้เจ้าของได้เลย
+    โดยเขาไม่เห็นข้อมูลของรายอื่น** (ถ้าเลือกผู้ฝากขายรายเดียว ชื่อไฟล์จะมีชื่อรายนั้นให้ด้วย)
+  - ยอดรวมในไฟล์เขียนเป็นสูตร `=SUM(...)` ไม่ใช่ค่านิ่ง เพื่อให้ผู้รับตรวจยอดเองได้
+- กด **↻ รีเฟรชแคตตาล็อก** ถ้าเพิ่งเพิ่ม/แก้ไข category หรือสินค้าใน Loyverse แล้วรายงานยังไม่อัปเดต
+  (ระบบ cache รายการสินค้าไว้ `REPORT_CATALOG_TTL_SEC` วินาที เพื่อลด request ไปที่ Loyverse API)
+
+> ⚠️ ยอดขายอิงจาก `receipt.line_items` (ไม่รวมต้นทุน/กำไร) refund ถูกหักออกจากยอดแล้ว
+> และบิลที่ถูกยกเลิก (`cancelled_at`) จะไม่ถูกนับ — รายงานนี้ยังไม่รองรับ VAT และมีสาขาเดียว
+
 ### รันด้วย Docker (แนะนำ)
 ```bash
 docker compose up --build
@@ -92,8 +113,13 @@ loyverseAPI/
 │   │   ├── step2_stock_update.py  ← Step 2: อัปเดตสต็อกจริงเข้าระบบ
 │   │   └── legacy_sync.py         ← (Legacy) รันแบบขั้นตอนเดียว
 │   │
+│   ├── reports/                ← รายงานสรุปยอดขายแยกตาม Category
+│   │   ├── catalog_cache.py    ← cache item_id → category (TTL, ล้างได้ผ่านปุ่มรีเฟรช)
+│   │   ├── sales_by_category.py← aggregate() (pure logic) + build_report() + CLI
+│   │   └── excel_export.py     ← สร้างไฟล์ .xlsx (2 ชีต) จาก SalesReport
+│   │
 │   └── web/                   ← Flask Web UI
-│       ├── app.py             ← หน้า Input/Run + Transactions
+│       ├── app.py             ← หน้า Input/Run + Transactions + Sales by Category
 │       └── templates/         ← HTML templates
 │
 ├── tests/test_project.py      ← test suite (รันโดยไม่ต้องมี credential จริง)
@@ -182,6 +208,10 @@ python -m loyverse.steps.step2_stock_update
 ```bash
 python -m loyverse.diagnostics      # ตรวจสอบสิทธิ์ Google Sheets
 python tests/test_project.py        # รัน test suite
+
+# สรุปยอดขายแยกตาม Category (พิมพ์ลง console และ/หรือ export .xlsx)
+python -m loyverse.reports.sales_by_category --from 2026-07-01 --to 2026-07-30 \
+       [--category "ร้านเอ" --category "ร้านบี"] [--excel out.xlsx]
 ```
 
 > Web UI กับ CLI ใช้ logic เดียวกัน (`loyverse/steps/`) —
@@ -201,6 +231,10 @@ python tests/test_project.py        # รัน test suite
 | `TRANSACTION_OUTPUT_MODE` | ❌ | `csv` | `csv` หรือ `sheets` |
 | `SKU_DIGIT_PAD` | ❌ | `3` | จำนวนหลักของ running number |
 | `OUTPUT_DIR` | ❌ | `output` | folder สำหรับ output ทั้งหมด |
+| `REPORT_TIMEZONE` | ❌ | `Asia/Bangkok` | timezone ที่ใช้ตีความช่วงวันที่ในหน้ารายงาน |
+| `REPORT_MAX_RANGE_DAYS` | ❌ | `366` | จำนวนวันสูงสุดที่เลือกดูรายงานได้ในครั้งเดียว |
+| `REPORT_CATALOG_TTL_SEC` | ❌ | `600` | อายุ cache ของรายการสินค้า/category (วินาที) ก่อนดึงใหม่ |
+| `REPORT_CURRENCY_SYMBOL` | ❌ | `฿` | สัญลักษณ์สกุลเงินที่แสดงในหน้ารายงาน |
 
 ---
 
